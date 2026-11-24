@@ -187,6 +187,16 @@ Whenever you change any file:
 
 The link stays the same, so clients don't need a new one. If an update adds new columns, run **`upgradeAllTenants`** once from the editor.
 
+### Faster updates from this Mac (clasp is already set up)
+
+From the project folder, run:
+```
+export PATH=$HOME/.local/node/bin:$PATH
+clasp push --force
+clasp deploy -i AKfycbyaMbrRbhLf7HZ_nQfo0UGQWSo7_oNPnX1hcIwnEY6YmC2hnfEdHvI_K-TnbJJDNZWTWQ --description "update"
+```
+This updates the **same** live link. Don't run `clasp deploy` without `-i`, because that would create a second link.
+
 ## 11. Forgot your master password?
 
 In the Apps Script editor, choose **`resetMasterPassword`** and click **Run**. Your login goes back to `master` / `Armedias@123`, and you'll be asked to change it.
