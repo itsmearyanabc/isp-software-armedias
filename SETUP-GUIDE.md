@@ -97,12 +97,12 @@ Google doesn't let you attach your own domain directly to an Apps Script link. I
 **Steps:**
 
 1. Create the subdomain (e.g. `isp`) in your hosting panel (cPanel, Hostinger, Namecheap, …). Any normal web hosting works, because these are plain HTML files.
-2. Open `domain-hosting/index.html` in a text editor and replace `PASTE_YOUR_WEB_APP_URL_HERE` with your `/exec` link.
-3. Open `domain-hosting/admin/index.html` and do the same, keeping `?master` at the end:
-   `https://script.google.com/macros/s/XXXX/exec?master`
+2. Open `domain-hosting/config.js` and replace `PASTE_YOUR_WEB_APP_URL_HERE` with your `/exec` link.
+3. You only change this one file. The `/admin` page adds `?master` by itself.
 4. Upload the **contents** of `domain-hosting/` to the subdomain's folder (usually `public_html/isp`), keeping this layout:
    ```
    index.html
+   config.js
    logo.png
    admin/index.html
    ```
@@ -111,17 +111,33 @@ Google doesn't let you attach your own domain directly to an Apps Script link. I
 
 Prefer `admin.armedias.com` instead of `/admin`? Create a second subdomain `admin` and upload `admin/index.html` (renamed to `index.html`) plus `logo.png` into it.
 
-### Option A — Cloudflare Pages (free tier)
+### Option A — Cloudflare Pages + GitHub (free, auto-deploys on every push) ⭐
+
+The repo contains everything, but Cloudflare publishes **only** the `domain-hosting` folder. Your Apps Script code is never put on your website.
+
+1. Edit `domain-hosting/config.js` and paste your `/exec` link. This is the only file to change.
+2. Commit and push to GitHub (`git add -A && git commit -m "set app url" && git push`).
+3. Cloudflare dashboard → **Workers & Pages → Create → Pages → Connect to Git**. Authorise GitHub and pick the repo.
+4. Build settings:
+   - **Framework preset:** None
+   - **Build command:** *(leave empty)*
+   - **Build output directory:** `domain-hosting`
+5. **Save and Deploy.** You get `<project>.pages.dev`.
+6. Project → **Custom domains → Set up a custom domain** → `isp.armedias.com`.
+
+From now on, every `git push` to `main` updates the site automatically. Keep the GitHub repo **private**, because it is the software you sell.
+
+### Option A2 — Cloudflare Pages (drag & drop, no Git)
 
 1. Cloudflare dashboard → **Workers & Pages → Create → Pages → Upload assets**.
-2. Name the project (e.g. `armedias-isp`) and upload the `domain-hosting` folder, after pasting your `/exec` link into both HTML files.
+2. Name the project (e.g. `armedias-isp`) and upload the `domain-hosting` folder, after pasting your `/exec` link into `config.js`.
 3. **Deploy.** You get `armedias-isp.pages.dev`.
 4. **Custom domains → Set up a custom domain** → enter `isp.armedias.com`. If your domain is already on Cloudflare, the DNS record is added automatically.
 5. Done: `isp.armedias.com` shows the client login and `isp.armedias.com/admin` shows your Master Console.
 
 ### Option B — your VPS (nginx)
 
-1. Copy the files to the server, e.g. `/var/www/armedias-isp/` (`index.html`, `logo.png`, `admin/index.html`).
+1. Copy the files to the server, e.g. `/var/www/armedias-isp/` (`index.html`, `config.js`, `logo.png`, `admin/index.html`).
 2. Add an nginx site:
    ```
    server {
