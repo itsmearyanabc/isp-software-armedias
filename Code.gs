@@ -1,5 +1,5 @@
 /**
- * Armedias CRM — client app backend (Code.gs)
+ * AR Medias CRM — client app backend (Code.gs)
  * © Armedias. All rights reserved.
  *
  * Multi-company: every client business has its OWN Google Sheet (created from the Master Console).
@@ -9,7 +9,7 @@
  */
 
 // ============== Configuration ==============
-var APP_NAME = 'Armedias CRM';
+var APP_NAME = 'AR Medias CRM';
 var USERS_SHEET = 'Users';
 var LOGS_SHEET = 'Logs';
 var ROLES_SHEET = 'Roles';
@@ -118,6 +118,7 @@ function doGet(e) {
   var isMaster = Object.prototype.hasOwnProperty.call(p, 'master');
   var t = HtmlService.createTemplateFromFile(isMaster ? 'master' : 'index');
   t.appUrlJson = JSON.stringify(ScriptApp.getService().getUrl() || '');
+  t.startModeJson = JSON.stringify(p.mode === 'signup' ? 'signup' : 'login');
   return t.evaluate()
     .setTitle(isMaster ? APP_NAME + ' — Master Console' : APP_NAME)
     .setSandboxMode(HtmlService.SandboxMode.IFRAME)

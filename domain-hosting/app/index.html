@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign in — AR Medias CRM</title>
+  <link rel="icon" type="image/png" href="/logo.png">
+  <style>
+    html, body { margin:0; padding:0; height:100%; background:#2B2F36; }
+    iframe { position:fixed; inset:0; width:100%; height:100%; border:0; display:block; }
+  </style>
+</head>
+<body>
+  <!-- The Google link comes from /config.js -->
+  <iframe id="app"
+          title="AR Medias CRM"
+          allow="clipboard-write"></iframe>
+  <script src="/config.js"></script>
+  <script>
+    var u = window.ARMEDIAS_APP_URL || '';
+    if (!/^https:\/\/script\.google\.com\//.test(u)) {
+      document.body.innerHTML = '<p style="color:#fff;font-family:sans-serif;padding:30px">Setup needed: put your Apps Script /exec link in config.js</p>';
+    } else {
+      // /app?signup opens the registration form directly
+      document.getElementById('app').src = u + (/[?&]signup\b/.test(location.search) ? '?mode=signup' : '');
+    }
+  </script>
+</body>
+</html>

@@ -1,5 +1,5 @@
 /**
- * Armedias CRM — Master Console backend (Master.gs)
+ * AR Medias CRM — Master Console backend (Master.gs)
  * © Armedias. All rights reserved.
  *
  * Lives in the spreadsheet this script is bound to:
@@ -15,7 +15,7 @@ var MASTER_DEFAULT_USER = 'master';
 var MASTER_DEFAULT_PASS = 'Armedias@123';   // used ONLY on first login; you are forced to change it
 // Your own client login address (e.g. 'https://isp.armedias.com'). Leave '' to use the Google script link.
 // Used in the login details you copy/WhatsApp to clients and in approval emails.
-var PUBLIC_LOGIN_URL = 'https://crm.armedias.com';
+var PUBLIC_LOGIN_URL = 'https://crm.armedias.com/app';
 function loginUrl_() { return PUBLIC_LOGIN_URL || ScriptApp.getService().getUrl(); }
 var T_COLS = ['tenant_id','company_name','owner_name','phone','email','city','address','spreadsheet_id','plan','monthly_fee',
               'max_customers','max_users','start_date','expiry_date','status','notes','admin_username','created_at','updated_at',
