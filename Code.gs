@@ -148,7 +148,7 @@ var API_CALLER = {
   getCustomer360:0, getUserActivity:0, resetUserPassword:0, getSettings:0, saveSettings:0,
   childRead:0, childInsert:0, childDelete:0,
   listApiKeys:0, createApiKey:0, revokeApiKey:0,
-  getWhatsAppConfig:0, saveWhatsAppConfig:0, testWhatsApp:0, sendInvoiceWhatsApp:0
+  getWhatsAppConfig:0, saveWhatsAppConfig:0, testWhatsApp:0, sendInvoiceWhatsApp:0, sendInvoiceEmail:0
 };
 
 function api(token, fn, args) {
@@ -573,7 +573,7 @@ var TBL = {
   areas:        { sheet:'Areas',          cols:['name','city','description','status','country'] },
   packages:     { sheet:'Packages',       cols:['name','speed_mbps','price','billing_cycle','description','status'] },
   customers:    { sheet:'Customers',      cols:['customer_code','full_name','phone','email','cnic','address','area_id','package_id','installation_date','monthly_due_day','ip_address','mac_address','connection_status','opening_balance','notes','previous_balance','current_balance'] },
-  invoices:     { sheet:'Invoices',       cols:['invoice_number','customer_id','package_id','billing_month','amount','discount','tax','total','previous_balance','due_date','status','paid_amount','balance'] },
+  invoices:     { sheet:'Invoices',       cols:['invoice_number','customer_id','package_id','billing_month','amount','discount','tax','total','previous_balance','due_date','status','paid_amount','balance','items'] },
   payments:     { sheet:'Payments',       cols:['receipt_number','slip_code','invoice_id','customer_id','amount','payment_method','payment_date','collected_by','reference_number','notes'] },
   expenses:     { sheet:'Expenses',       cols:['expense_date','category','description','amount','paid_by','receipt_image','notes'] },
   vendors:      { sheet:'Vendors',        cols:['vendor_code','vendor_name','contact_person','phone','email','address','city','opening_balance','current_balance','status','notes'] },
@@ -702,6 +702,7 @@ function tblAfterWrite_(key, obj, op){
 
 function tblInsert(caller, key, obj){
   if (!gate_(caller, key, 'a')) return { success:false, message:'Access denied' };
+  if (key === 'payments' && obj && obj.__bill) return createBillWithPayment_(caller, obj);
   var sh = tblSheet_(key); if (!sh) return { success:false, message:'Sheet missing' };
   obj = obj || {};
   var lock = LockService.getScriptLock();
@@ -735,6 +736,41 @@ function tblInsert(caller, key, obj){
   addLog(caller, key + ' Added', '#' + id);
   tblAfterWrite_(key, obj, 'insert');
   return { success:true, message:'Saved successfully!', id:id };
+}
+
+// live billing: items → (new products) → invoice → payment against it. Returns the payment id plus the bill.
+function pctAmt_(v, base) { var t = String(v == null ? '' : v).trim(); return /%$/.test(t) ? round2(base * num(t.replace('%', '')) / 100) : round2(num(t)); }
+function createBillWithPayment_(caller, obj) {
+  var bill = obj.__bill || {}; delete obj.__bill;
+  if (!gate_(caller, 'invoices', 'a')) return { success:false, message:'You are not allowed to create bills' };
+  if (!obj.customer_id) return { success:false, message:'Select the customer' };
+  var items = (bill.items || []).map(function(it){
+    return { product_id: String(it.product_id || ''), name: String(it.name || '').trim().slice(0, 120), qty: Math.max(0, num(it.qty)), price: round2(num(it.price)) };
+  }).filter(function(it){ return it.name && it.qty > 0; });
+  if (!items.length) return { success:false, message:'Add at least one item to the bill' };
+  var ps = tblSheet_('payments'), pdata = ps.getDataRange().getValues();
+  var dup = uniqueErr_('payments', pdata[0], pdata, obj, null); if (dup) return dup;
+  var canProd = gate_(caller, 'packages', 'a'), known = {};
+  readObjs_('Packages').forEach(function(p){ known[String(p.name).toLowerCase()] = p.id; });
+  items.forEach(function(it){
+    if (it.product_id) return;
+    if (known[it.name.toLowerCase()]) { it.product_id = String(known[it.name.toLowerCase()]); return; }
+    if (bill.saveNew && canProd) { var r = tblInsert(caller, 'packages', { name:it.name, price:it.price, billing_cycle:'one_time', description:'', status:'active' }); if (r.success) { it.product_id = String(r.id); known[it.name.toLowerCase()] = r.id; } }
+  });
+  var subtotal = round2(items.reduce(function(s, it){ return s + it.qty * it.price; }, 0));
+  var discount = pctAmt_(bill.discount, subtotal), tax = pctAmt_(bill.tax, round2(subtotal - discount));
+  var inv = tblInsert(caller, 'invoices', { customer_id: obj.customer_id, package_id: items[0].product_id || '', billing_month: monthStr_(),
+    amount: subtotal, discount: discount, tax: tax, due_date: obj.payment_date || todayStr_(), items: JSON.stringify(items) });
+  if (!inv.success) return inv;
+  var total = round2(subtotal - discount + tax), invNo = 'INV-' + pad_(inv.id), payId = null;
+  if (num(obj.amount) > 0) {
+    obj.invoice_id = inv.id;
+    var pr = tblInsert(caller, 'payments', obj);
+    if (!pr.success) return { success:false, message:'Bill ' + invNo + ' was created, but the payment was not saved: ' + pr.message };
+    payId = pr.id;
+  }
+  return { success:true, id: payId, invoice_id: inv.id, invoice_number: invNo, total: total,
+           message: 'Bill ' + invNo + ' created' + (payId ? ' and payment recorded' : ' (no payment received yet)') };
 }
 
 function tblUpdate(caller, key, id, obj){
@@ -865,7 +901,7 @@ function userLookup_(){
 function customerLookup_(){
   return readObjs_('Customers').map(function(c){
     return { id:c.id, label:(c.customer_code ? c.customer_code + ' · ' : '') + (c.full_name || ''), name:c.full_name || '',
-             phone:c.phone || '', area_id:c.area_id || '', package_id:c.package_id || '',
+             phone:c.phone || '', email:c.email || '', area_id:c.area_id || '', package_id:c.package_id || '',
              balance:round2(num(c.current_balance)), previous:round2(num(c.previous_balance)), status:c.connection_status || '' };
   });
 }
@@ -1431,11 +1467,42 @@ function invoicePdf_(inv, cust, co) {
     '<td style="text-align:right"><div style="font-size:18px;font-weight:700;color:#b8962e">INVOICE / BILL</div><div style="font-size:12px">' + e(inv.invoice_number) + '</div></td></tr></table>' +
     '<table style="width:100%;font-size:13px;margin-bottom:14px"><tr><td><b>Bill to:</b> ' + e(cust.full_name || '') + '<br>' + e(cust.phone || '') + '<br>' + e(cust.address || '') + '</td>' +
     '<td style="text-align:right"><b>Date:</b> ' + e(ymd_(inv.created_at) || todayStr_()) + '<br><b>Due:</b> ' + e(ymd_(inv.due_date)) + '<br><b>Period:</b> ' + e(inv.billing_month || '') + '</td></tr></table>' +
+    itemsHtml_(inv, m, e) +
     '<table style="width:100%;border-collapse:collapse;font-size:13px">' +
     row('Amount', m(inv.amount)) + row('Discount', '- ' + m(inv.discount)) + row('Net amount', m(net)) + row('Tax / GST', m(inv.tax)) + row('TOTAL', m(inv.total), true) +
     (num(inv.previous_balance) > 0 ? row('Previous balance', m(inv.previous_balance)) : '') + '</table>' +
     '<p style="margin-top:28px;color:#888;font-size:11px;text-align:center">Thank you — ' + e(co.company_name) + '</p></body></html>';
   return HtmlService.createHtmlOutput(html).getBlob().getAs('application/pdf').setName((inv.invoice_number || 'invoice') + '.pdf');
+}
+
+function itemsHtml_(inv, m, e) {
+  var items = []; try { items = JSON.parse(inv.items || '[]'); } catch (x) {}
+  if (!items.length) return '';
+  return '<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:12px"><tr style="background:#2B2F36;color:#fff"><th style="padding:7px;text-align:left">Item</th><th style="padding:7px;text-align:right">Qty</th><th style="padding:7px;text-align:right">Price</th><th style="padding:7px;text-align:right">Amount</th></tr>' +
+    items.map(function(it){ return '<tr><td style="padding:7px;border-bottom:1px solid #eee">' + e(it.name) + '</td><td style="padding:7px;border-bottom:1px solid #eee;text-align:right">' + e(it.qty) + '</td><td style="padding:7px;border-bottom:1px solid #eee;text-align:right">' + m(it.price) + '</td><td style="padding:7px;border-bottom:1px solid #eee;text-align:right">' + m(num(it.qty) * num(it.price)) + '</td></tr>'; }).join('') + '</table>';
+}
+
+// email the PDF bill (sent from the Google account that runs the app, shown with the company's name)
+function sendInvoiceEmail(caller, invoiceId) {
+  if (!gate_(caller, 'invoices', 'v')) return { success:false, message:'Access denied' };
+  var inv = readObjs_('Invoices').filter(function(x){ return String(x.id) === String(invoiceId); })[0];
+  if (!inv) return { success:false, message:'Invoice not found' };
+  var cust = custById_(inv.customer_id) || {}, to = String(cust.email || '').trim();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return { success:false, message:'This customer has no valid email address' };
+  if (MailApp.getRemainingDailyQuota() < 1) return { success:false, message:'Daily email limit reached — try again tomorrow' };
+  var co = settingsMap_(), total = (co.currency || 'INR') + ' ' + round2(num(inv.total)).toLocaleString('en-IN');
+  var esc = function(v){ return String(v == null ? '' : v).replace(/[&<>"]/g, function(c){ return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]; }); };
+  try {
+    MailApp.sendEmail({ to: to, name: co.company_name || 'Billing', subject: 'Your bill ' + inv.invoice_number + ' from ' + (co.company_name || 'us'),
+      htmlBody: '<p>Dear ' + esc(cust.full_name || 'Customer') + ',</p><p>Thank you for your purchase. Your bill <b>' + esc(inv.invoice_number) + '</b> for <b>' + esc(total) + '</b> is attached.</p>' +
+                (co.support_phone ? '<p>Questions? Call us on ' + esc(co.support_phone) + '.</p>' : '') + '<p>Regards,<br>' + esc(co.company_name || '') + '</p>',
+      attachments: [ invoicePdf_(inv, cust, co) ] });
+    addLog(caller, 'Email Bill Sent', inv.invoice_number + ' → ' + to);
+    return { success:true, message:'Bill ' + inv.invoice_number + ' emailed to ' + to };
+  } catch (e) {
+    addLog(caller, 'Email Bill Failed', inv.invoice_number + ': ' + e.message);
+    return { success:false, message:'Email: ' + e.message };
+  }
 }
 
 function sendInvoiceWhatsApp(caller, invoiceId) {

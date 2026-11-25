@@ -2100,7 +2100,7 @@
         }); });
 
       const savePay = (form) => gsRun('tblInsert', currentUser, 'payments', form).then(r => {
-        if (r && r.success) { setPay(null); Swal.fire({ icon:'success', title:'Payment recorded', timer:1300, showConfirmButton:false }); mutate(); mutateLedger(); }
+        if (r && r.success) { setPay(null); if (!autoSendBill('payments', r, currentUser, form, lookups)) toastOk('Payment recorded'); mutate(); mutateLedger(); }
         else Swal.fire({ icon:r && r.duplicate ? 'warning' : 'error', title:r && r.duplicate ? 'Duplicate not allowed' : 'Error', text:(r && r.message) || 'Failed' });
       });
 
@@ -2214,7 +2214,7 @@
       const worst = rows.filter(r => r.days_overdue >= 30).length;
       const remind = (r) => window.open(waLink(r.phone, `Dear ${r.full_name}, you have ${fmtMoney(r.outstanding)} outstanding across ${r.invoices} invoice(s), overdue ${r.days_overdue} days. Kindly clear it ${P.dun}. Thank you.`), '_blank');
       const suspend = (r) => Swal.fire({ icon:'question', title:'Suspend this connection?', showCancelButton:true, confirmButtonText:'Suspend' }).then(res => { if (res.isConfirmed) gsRun('tblUpdate', currentUser, 'customers', r.id, { connection_status:'suspended' }).then(() => { Swal.fire({ icon:'success', timer:1000, showConfirmButton:false }); mutate(); mutateLedger(); }); });
-      const savePay = (form) => gsRun('tblInsert', currentUser, 'payments', form).then(r => { if (r && r.success) { setPay(null); Swal.fire({ icon:'success', title:'Payment recorded', timer:1300, showConfirmButton:false }); mutate(); mutateLedger(); } else Swal.fire({ icon:r && r.duplicate ? 'warning' : 'error', title:r && r.duplicate ? 'Duplicate not allowed' : 'Error', text:(r && r.message) || 'Failed' }); });
+      const savePay = (form) => gsRun('tblInsert', currentUser, 'payments', form).then(r => { if (r && r.success) { setPay(null); if (!autoSendBill('payments', r, currentUser, form, lookups)) toastOk('Payment recorded'); mutate(); mutateLedger(); } else Swal.fire({ icon:r && r.duplicate ? 'warning' : 'error', title:r && r.duplicate ? 'Duplicate not allowed' : 'Error', text:(r && r.message) || 'Failed' }); });
       const q2 = (s) => '"' + String(s == null ? '' : s).replace(/"/g, '""') + '"';
       const exportCsv = () => {
         const head = ['Code','Customer','Phone','Area','Package','Speed','Invoices','Previous','TotalBalance','DaysOverdue','Status'];
@@ -2982,7 +2982,7 @@
       return 'https://wa.me/' + d + (msg ? '?text=' + encodeURIComponent(msg) : '');
     };
     const faPrefix = (icon) => (icon === 'fa-whatsapp' || icon === 'fa-facebook' || icon === 'fa-instagram') ? 'fab' : 'fas';
-    const AI_CLS = { 'fa-whatsapp':'ai-wa', 'fa-phone':'ai-call', 'fa-phone-volume':'ai-call', 'fa-money-bill-wave':'ai-pay', 'fa-file-invoice-dollar':'ai-pay', 'fa-hand-holding-dollar':'ai-pay', 'fa-coins':'ai-pay', 'fa-bolt':'ai-warn', 'fa-power-off':'ai-danger', 'fa-ban':'ai-danger', 'fa-print':'ai-info', 'fa-eye':'detail-icon', 'fa-paper-plane':'ai-wa' };
+    const AI_CLS = { 'fa-whatsapp':'ai-wa', 'fa-phone':'ai-call', 'fa-phone-volume':'ai-call', 'fa-money-bill-wave':'ai-pay', 'fa-file-invoice-dollar':'ai-pay', 'fa-hand-holding-dollar':'ai-pay', 'fa-coins':'ai-pay', 'fa-bolt':'ai-warn', 'fa-power-off':'ai-danger', 'fa-ban':'ai-danger', 'fa-print':'ai-info', 'fa-eye':'detail-icon', 'fa-paper-plane':'ai-wa', 'fa-envelope':'ai-call' };
     const custPhone = (lk, id) => { const c = ((lk && lk.customers) || []).find(o => String(o.id) === String(id)); return c ? (c.phone || '') : ''; };
     const custName  = (lk, id) => { const c = ((lk && lk.customers) || []).find(o => String(o.id) === String(id)); return c ? (c.name || c.label || 'Customer') : 'Customer'; };
 
@@ -3063,7 +3063,9 @@
         <td style="text-align:right"><b>${type === 'invoice' ? 'Invoice #' : 'Receipt #'}:</b> ${esc(row.invoice_number || row.receipt_number || '')}<br><b>Date:</b> ${esc((row.due_date || row.payment_date || '').toString().slice(0, 10))}</td></tr></table>`;
       let body;
       if (type === 'invoice') {
-        body = `<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:#33383d;color:#fff"><th style="padding:8px;text-align:left">Description</th><th style="padding:8px;text-align:right">Amount</th></tr></thead><tbody>
+        let its = []; try { its = JSON.parse(row.items || '[]'); } catch (e) {}
+        const itemsT = its.length ? `<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:12px"><thead><tr style="background:#33383d;color:#fff"><th style="padding:7px;text-align:left">Item</th><th style="padding:7px;text-align:right">Qty</th><th style="padding:7px;text-align:right">Price</th><th style="padding:7px;text-align:right">Amount</th></tr></thead><tbody>${its.map(it => `<tr><td style="padding:7px;border-bottom:1px solid #eee">${esc(it.name)}</td><td style="padding:7px;border-bottom:1px solid #eee;text-align:right">${esc(it.qty)}</td><td style="padding:7px;border-bottom:1px solid #eee;text-align:right">${money(it.price)}</td><td style="padding:7px;border-bottom:1px solid #eee;text-align:right">${money((Number(it.qty) || 0) * (Number(it.price) || 0))}</td></tr>`).join('')}</tbody></table>` : '';
+        body = itemsT + `<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:#33383d;color:#fff"><th style="padding:8px;text-align:left">Description</th><th style="padding:8px;text-align:right">Amount</th></tr></thead><tbody>
           <tr><td style="padding:8px;border-bottom:1px solid #eee">Billing month ${esc(row.billing_month || '')} (amount)</td><td style="padding:8px;border-bottom:1px solid #eee;text-align:right">${money(row.amount)}</td></tr>
           <tr><td style="padding:8px;border-bottom:1px solid #eee">Discount</td><td style="padding:8px;border-bottom:1px solid #eee;text-align:right">- ${money(row.discount)}</td></tr>
           <tr><td style="padding:8px;border-bottom:1px solid #eee">Tax</td><td style="padding:8px;border-bottom:1px solid #eee;text-align:right">${money(row.tax)}</td></tr>
@@ -3202,22 +3204,33 @@
     const COUNTRIES = 'India|Pakistan|Bangladesh|Nepal|Sri Lanka|Bhutan|Maldives|United Arab Emirates|Saudi Arabia|Qatar|Oman|Kuwait|Bahrain|United States|United Kingdom|Canada|Australia|New Zealand|Singapore|Malaysia|Indonesia|Thailand|Philippines|Vietnam|Japan|China|Hong Kong|South Korea|Germany|France|Italy|Spain|Netherlands|Belgium|Switzerland|Sweden|Norway|Denmark|Ireland|Portugal|Poland|Russia|Turkey|Egypt|South Africa|Kenya|Nigeria|Brazil|Mexico|Argentina'.split('|');
     const INDIA_CITIES = ('Mumbai|Delhi|New Delhi|Bengaluru|Hyderabad|Ahmedabad|Chennai|Kolkata|Surat|Pune|Jaipur|Lucknow|Kanpur|Nagpur|Indore|Thane|Bhopal|Visakhapatnam|Pimpri-Chinchwad|Patna|Vadodara|Ghaziabad|Ludhiana|Agra|Nashik|Faridabad|Meerut|Rajkot|Kalyan-Dombivli|Vasai-Virar|Varanasi|Srinagar|Aurangabad|Dhanbad|Amritsar|Navi Mumbai|Prayagraj|Ranchi|Howrah|Coimbatore|Jabalpur|Gwalior|Vijayawada|Jodhpur|Madurai|Raipur|Kota|Guwahati|Chandigarh|Solapur|Hubballi-Dharwad|Tiruchirappalli|Bareilly|Mysuru|Tiruppur|Gurugram|Aligarh|Jalandhar|Bhubaneswar|Salem|Mira-Bhayandar|Warangal|Thiruvananthapuram|Guntur|Bhiwandi|Saharanpur|Gorakhpur|Bikaner|Amravati|Noida|Greater Noida|Jamshedpur|Bhilai|Cuttack|Firozabad|Kochi|Nellore|Bhavnagar|Dehradun|Durgapur|Asansol|Rourkela|Nanded|Kolhapur|Ajmer|Akola|Gulbarga|Jamnagar|Ujjain|Loni|Siliguri|Jhansi|Ulhasnagar|Jammu|Sangli|Mangaluru|Erode|Belagavi|Ambattur|Tirunelveli|Malegaon|Gaya|Udaipur|Kozhikode|Thrissur|Kollam|Davanagere|Kurnool|Rajahmundry|Bokaro|Bellary|Patiala|Agartala|Bhagalpur|Muzaffarnagar|Bhatpara|Panihati|Latur|Dhule|Tirupati|Rohtak|Korba|Bhilwara|Berhampur|Muzaffarpur|Ahmednagar|Mathura|Kakinada|Kollam|Bilaspur|Shahjahanpur|Satara|Bijapur|Rampur|Shivamogga|Chandrapur|Junagadh|Alwar|Bardhaman|Kulti|Nizamabad|Parbhani|Tumakuru|Khammam|Uzhavarkarai|Bihar Sharif|Panipat|Darbhanga|Bally|Aizawl|Dewas|Ichalkaranji|Karnal|Bathinda|Jalna|Eluru|Barasat|Purnia|Satna|Mau|Sonipat|Farrukhabad|Sagar|Durg|Imphal|Ratlam|Hapur|Arrah|Anantapur|Karimnagar|Etawah|Ambernath|North Dumdum|Bharatpur|Begusarai|Gandhidham|Baranagar|Tiruvottiyur|Puducherry|Sikar|Thoothukudi|Rewa|Mirzapur|Raichur|Pali|Ramagundam|Haridwar|Vijayanagaram|Katihar|Nagercoil|Sri Ganganagar|Karawal Nagar|Mango|Thanjavur|Bulandshahr|Uluberia|Murwara|Sambhal|Singrauli|Nadiad|Secunderabad|Naihati|Yamunanagar|Bidhannagar|Pallavaram|Bidar|Munger|Panchkula|Burhanpur|Kharagpur|Dindigul|Gandhinagar|Hospet|Nangloi Jat|Malda|Ongole|Deoghar|Chapra|Haldia|Khandwa|Nandyal|Morena|Amroha|Anand|Bhind|Bhalswa Jahangir Pur|Madhyamgram|Bhiwani|Berhampore|Ambala|Morbi|Fatehpur|Raebareli|Khora|Chittoor|Bhusawal|Orai|Bahraich|Phusro|Vellore|Mehsana|Raiganj|Sirsa|Danapur|Serampore|Sultan Pur Majra|Guna|Jaunpur|Panvel|Shivpuri|Surendranagar|Unnao|Chinsurah|Alappuzha|Kottayam|Machilipatnam|Shimla|Adoni|Udupi|Tenali|Proddatur|Saharsa|Hindupur|Sasaram|Hajipur|Bhimavaram|Kumbakonam|Dehri|Madanapalle|Siwan|Bettiah|Guntakal|Srikakulam|Motihari|Dharmavaram|Gudivada|Phagwara|Pudukkottai|Hosur|Narasaraopet|Suryapet|Miryalaguda|Tadipatri|Karaikudi|Kishanganj|Jamalpur|Ballia|Kavali|Tadepalligudem|Amaravati|Buxar|Jehanabad|Aurangabad (Bihar)|Gangtok|Itanagar|Kohima|Shillong|Port Blair|Daman|Silvassa|Kavaratti|Leh|Panaji|Margao|Vasco da Gama|Mapusa|Puri|Sambalpur|Balasore|Baripada|Jharsuguda|Hazaribagh|Giridih|Ramgarh|Medininagar|Haldwani|Rudrapur|Kashipur|Roorkee|Rishikesh|Nainital|Mussoorie|Solan|Mandi|Dharamshala|Kullu|Manali|Pathankot|Hoshiarpur|Mohali|Moga|Firozpur|Kapurthala|Zirakpur|Rewari|Hisar|Jind|Kaithal|Kurukshetra|Palwal|Bahadurgarh|Ayodhya|Mathura-Vrindavan|Gonda|Basti|Azamgarh|Sultanpur|Pratapgarh|Lakhimpur|Sitapur|Hardoi|Badaun|Pilibhit|Lalitpur|Banda|Chitrakoot|Ghazipur|Deoria|Kushinagar|Bijnor|Moradabad|Etah|Mainpuri|Kannauj|Kasganj|Hathras|Rae Bareli|Barabanki|Akbarpur|Bhadohi|Chandauli|Sonbhadra|Vidisha|Hoshangabad|Itarsi|Chhindwara|Seoni|Mandsaur|Neemuch|Shajapur|Sehore|Damoh|Chhatarpur|Tikamgarh|Datia|Betul|Harda|Balaghat|Mandla|Jagdalpur|Ambikapur|Raigarh|Rajnandgaon|Dhamtari|Mahasamund|Bhuj|Porbandar|Veraval|Navsari|Valsad|Vapi|Bharuch|Ankleshwar|Godhra|Dahod|Palanpur|Patan|Himmatnagar|Botad|Amreli|Ratnagiri|Sindhudurg|Kudal|Beed|Osmanabad|Yavatmal|Wardha|Gondia|Bhandara|Washim|Buldhana|Hingoli|Baramati|Lonavala|Karad|Hassan|Mandya|Chikkamagaluru|Chitradurga|Kolar|Karwar|Bagalkot|Gadag|Haveri|Koppal|Chamarajanagar|Madikeri|Kannur|Kasaragod|Palakkad|Malappuram|Pathanamthitta|Idukki|Wayanad|Ooty|Karur|Namakkal|Krishnagiri|Dharmapuri|Cuddalore|Villupuram|Kanchipuram|Tiruvannamalai|Nagapattinam|Ramanathapuram|Sivakasi|Virudhunagar|Theni|Rameswaram|Kanyakumari|Ariyalur|Perambalur|Mahbubnagar|Nalgonda|Adilabad|Siddipet|Mancherial|Sangareddy|Kadapa|Kurnool|Anakapalli|Bapatla|Chirala|Kalimpong|Darjeeling|Jalpaiguri|Cooch Behar|Bankura|Purulia|Midnapore|Krishnanagar|Shantiniketan|Dibrugarh|Jorhat|Silchar|Tezpur|Nagaon|Tinsukia|Bongaigaon|Dimapur|Tura|Agartala|Udaipur (Tripura)|Kargil|Anantnag|Baramulla|Sopore|Kathua|Udhampur').split('|').filter((c, i, a) => a.indexOf(c) === i).sort();
     let PHONE_CC = '91';
-    let WA = { enabled:false, auto:false };   // official WhatsApp API status for this company (from lookups)
+    let WA = { enabled:false, auto:false };
+    let CUR_PERMS = null, LK = null;   // official WhatsApp API status for this company (from lookups)
     // after a NEW invoice is saved: ASK whether to send the bill on WhatsApp (sends without asking only if the company ticked auto-send).
     // Returns true when it showed its own popup (so the caller skips its "Saved" toast).
     const autoSendBill = (module, r, currentUser, form, lk) => {
-      if (module !== 'invoices' || !r || !r.id) return false;
+      if (!r || !r.success) return false;
+      const invId = module === 'invoices' ? r.id : (module === 'payments' ? r.invoice_id : null);
+      if (!invId) return false;
+      const custEmail = (((lk && lk.customers) || []).find(o => String(o.id) === String((form || {}).customer_id)) || {}).email || '';
+      const viaEmail = () => {
+        Swal.fire({ toast:true, position:'top-end', icon:'info', title:'Emailing bill…', showConfirmButton:false, timer:2500 });
+        gsRun('sendInvoiceEmail', currentUser, invId).then(x => Swal.fire({ toast:true, position:'top-end', icon:(x && x.success) ? 'success' : 'warning', title:(x && x.message) || 'Email failed', showConfirmButton:!(x && x.success), timer:(x && x.success) ? 3000 : undefined }));
+      };
       const viaApi = () => {
         Swal.fire({ toast:true, position:'top-end', icon:'info', title:'Sending bill on WhatsApp…', showConfirmButton:false, timer:2500 });
-        gsRun('sendInvoiceWhatsApp', currentUser, r.id).then(x => Swal.fire({ toast:true, position:'top-end', icon:(x && x.success) ? 'success' : 'warning', title:(x && x.message) || 'WhatsApp failed', showConfirmButton:!(x && x.success), timer:(x && x.success) ? 3000 : undefined }));
+        gsRun('sendInvoiceWhatsApp', currentUser, invId).then(x => Swal.fire({ toast:true, position:'top-end', icon:(x && x.success) ? 'success' : 'warning', title:(x && x.message) || 'WhatsApp failed', showConfirmButton:!(x && x.success), timer:(x && x.success) ? 3000 : undefined }));
       };
       if (WA.enabled && WA.auto) { viaApi(); return true; }
-      const f = form || {}, phone = custPhone(lk, f.customer_id), total = num0(f.amount) - num0(f.discount) + num0(f.tax);
-      const invNo = 'INV-' + String(r.id).padStart(5, '0');
-      Swal.fire({ icon:'success', title:'Invoice saved', text:'Send this bill to the customer on WhatsApp?', showCancelButton:true,
-          confirmButtonText:'<i class="fab fa-whatsapp"></i> Send on WhatsApp', cancelButtonText:'Not now', confirmButtonColor:'#1e7e34',
-          footer: WA.enabled ? 'Sent as a PDF through your WhatsApp Business number' : 'Opens WhatsApp with the bill details (connect the official API in API & Integrations to send PDF bills)' })
+      const f = form || {}, phone = custPhone(lk, f.customer_id);
+      const total = r.total != null ? r.total : num0(f.amount) - num0(f.discount) + num0(f.tax);
+      const invNo = r.invoice_number || ('INV-' + String(invId).padStart(5, '0'));
+      Swal.fire({ icon:'success', title:(module === 'payments' ? r.message : 'Invoice saved'), text:'Send bill ' + invNo + ' (' + fmtMoney(total) + ') to the customer?', showCancelButton:true,
+          showDenyButton: !!custEmail, denyButtonText:'<i class="fas fa-envelope"></i> Email', denyButtonColor:'#3455b0',
+          confirmButtonText:'<i class="fab fa-whatsapp"></i> WhatsApp', cancelButtonText:'Not now', confirmButtonColor:'#1e7e34',
+          footer: (WA.enabled ? 'WhatsApp: PDF bill through your WhatsApp Business number' : 'WhatsApp opens with the bill details') + (custEmail ? ' · Email: PDF bill to ' + esc(custEmail) : ' · Add the customer\'s email to send bills by email') })
         .then(res => {
+          if (res.isDenied) return viaEmail();
           if (!res.isConfirmed) return;
           if (WA.enabled) return viaApi();
           if (!telDigits(phone)) return Swal.fire({ icon:'info', title:'No phone number', text:'This customer has no phone number on file.' });
@@ -3354,6 +3367,7 @@
           {k:'pay', icon:'fa-money-bill-wave', label:'Record Payment', primary:true, type:'form', module:'payments', prefill:r=>({invoice_id:r.id, customer_id:r.customer_id, amount:r.balance}), when:r=>(Number(r.balance)||0)>0.009, gate:{page:'payments',perm:'a'}},
           {k:'remind', icon:'fa-whatsapp', label:'Send Reminder', type:'wa', phone:(r,lk)=>custPhone(lk,r.customer_id), msg:(r,lk)=>`Dear ${custName(lk,r.customer_id)}, invoice ${r.invoice_number} (${r.billing_month}) — previous balance ${fmtMoney(r.previous_balance)}, this month ${fmtMoney(r.total)}, payable now ${fmtMoney(r.balance)}, due ${String(r.due_date||'').slice(0,10)}. Kindly clear it ${P.dun}. Thank you.`, when:r=>(Number(r.balance)||0)>0.009},
           {k:'wasend', icon:'fa-paper-plane', label:'Send bill on WhatsApp (API)', type:'fn', fn:'sendInvoiceWhatsApp', args:r=>[r.id], when:()=>WA.enabled, confirm:'Send this bill to the customer on WhatsApp?', confirmText:'A PDF bill is sent through your WhatsApp Business number.', gate:{page:'invoices',perm:'v'}},
+          {k:'mailbill', icon:'fa-envelope', label:'Email bill (PDF)', type:'fn', fn:'sendInvoiceEmail', args:r=>[r.id], when:r=>!!((((LK && LK.customers) || []).find(o => String(o.id) === String(r.customer_id)) || {}).email), confirm:'Email this bill to the customer?', gate:{page:'invoices',perm:'v'}},
           {k:'print', icon:'fa-print', label:'Print Invoice', type:'print', doc:'invoice'}
         ]
       },
@@ -3787,6 +3801,52 @@
     const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
     const pctOf = (v, base) => { const t = String(v == null ? '' : v).trim(); return /%$/.test(t) ? r2(base * num0(t.replace('%', '')) / 100) : r2(num0(t)); };
     const invoiceMath = (f) => { const amount = r2(num0(f.amount)), discount = pctOf(f.discount, amount), net = r2(amount - discount), tax = pctOf(f.tax, net); return { amount, discount, net, tax, total: r2(net + tax) }; };
+    // items → subtotal → discount → net → tax → total (same math as the server)
+    const billMath = (b) => {
+      const sub = r2((b.items || []).reduce((s, it) => s + num0(it.qty) * num0(it.price), 0));
+      const discount = pctOf(b.discount, sub), net = r2(sub - discount), tax = pctOf(b.tax, net);
+      return { sub, discount, net, tax, total: r2(net + tax) };
+    };
+    function BillBuilder({ bill, setBill, lookups }) {
+      const prods = ((lookups && lookups.packages) || []).map(p => ({ id:String(p.id), label:p.name + ' · ' + fmtMoney(p.price) }));
+      const upd = (i, patch) => setBill(b => ({ ...b, items: b.items.map((it, j) => j === i ? { ...it, ...patch } : it) }));
+      const pick = (i, v) => {
+        const p = ((lookups && lookups.packages) || []).find(o => String(o.id) === String(v));
+        upd(i, p ? { product_id:String(p.id), name:p.name, price:p.price } : { product_id:'', name:String(v || '') });
+      };
+      const m = billMath(bill);
+      const cell = { padding:'4px 6px', verticalAlign:'middle' };
+      return (
+        <div style={{ border:'2px solid var(--navy-accent)', borderRadius:10, padding:12, marginBottom:16, background:'#fffdf6' }}>
+          <div style={{ fontWeight:700, marginBottom:8, color:'var(--navy-primary)' }}><i className="fas fa-receipt"></i> Bill items <span style={{ fontWeight:400, fontSize:12, color:'#888' }}>— pick a {P.package.toLowerCase()} or type a new one</span></div>
+          <div style={{ overflowX:'auto' }}>
+            <table style={{ width:'100%', borderCollapse:'collapse', minWidth:520 }}>
+              <thead><tr style={{ fontSize:12, color:'#666', textAlign:'left' }}><th style={cell}>{P.package}</th><th style={{ ...cell, width:80 }}>Qty</th><th style={{ ...cell, width:120 }}>Price</th><th style={{ ...cell, width:110, textAlign:'right' }}>Amount</th><th style={{ ...cell, width:40 }}></th></tr></thead>
+              <tbody>{bill.items.map((it, i) => (
+                <tr key={i}>
+                  <td style={cell}><SearchableDropdown options={prods} value={it.product_id || it.name} onChange={(v) => pick(i, v)} placeholder={'— Select or type —'} allowCustom /></td>
+                  <td style={cell}><input type="number" min="0" step="any" value={it.qty} onChange={(e) => upd(i, { qty:e.target.value })} style={{ width:'100%', padding:8, border:'1px solid #d0d0d0', borderRadius:8 }} /></td>
+                  <td style={cell}><input type="number" min="0" step="any" value={it.price} onChange={(e) => upd(i, { price:e.target.value })} style={{ width:'100%', padding:8, border:'1px solid #d0d0d0', borderRadius:8 }} /></td>
+                  <td style={{ ...cell, textAlign:'right', fontWeight:600 }}>{fmtMoney(num0(it.qty) * num0(it.price))}</td>
+                  <td style={cell}>{bill.items.length > 1 && <button type="button" className="action-icon delete-icon" onClick={() => setBill(b => ({ ...b, items: b.items.filter((x, j) => j !== i) }))}><i className="fas fa-xmark"></i></button>}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+          <button type="button" className="btn btn-secondary btn-sm" style={{ margin:'6px 0 10px' }} onClick={() => setBill(b => ({ ...b, items: [...b.items, { product_id:'', name:'', qty:1, price:'' }] }))}><i className="fas fa-plus"></i> Add item</button>
+          <div className="form-grid">
+            <div className="form-group" style={{ marginBottom:8 }}><label>Discount (amount or %)</label><input value={bill.discount} onChange={(e) => setBill(b => ({ ...b, discount:e.target.value }))} placeholder="e.g. 100 or 10%" /></div>
+            <div className="form-group" style={{ marginBottom:8 }}><label>Tax / GST (amount or %)</label><input value={bill.tax} onChange={(e) => setBill(b => ({ ...b, tax:e.target.value }))} placeholder="e.g. 18%" /></div>
+          </div>
+          <div style={{ background:'#f8f9fb', border:'1px solid #e3e6eb', borderRadius:10, padding:'8px 14px', fontSize:14 }}>
+            {[['Subtotal', m.sub], ['− Discount', m.discount], ['Net amount', m.net], ['+ Tax / GST', m.tax]].map(([l, v]) => <div key={l} style={{ display:'flex', justifyContent:'space-between', padding:'4px 0', borderBottom:'1px dashed #e3e6eb', fontWeight: l === 'Net amount' ? 700 : 400 }}><span>{l}</span><span>{fmtMoney(v)}</span></div>)}
+            <div style={{ display:'flex', justifyContent:'space-between', padding:'6px 0 2px', fontWeight:800, fontSize:18, color:'var(--navy-primary)' }}><span>Bill total</span><span>{fmtMoney(m.total)}</span></div>
+          </div>
+          {can(CUR_PERMS, 'packages', 'a') && <label style={{ display:'flex', alignItems:'center', gap:8, marginTop:10, fontSize:13 }}><input type="checkbox" checked={!!bill.saveNew} onChange={(e) => setBill(b => ({ ...b, saveNew:e.target.checked }))} /> Save newly typed items to {P.packages}</label>}
+        </div>
+      );
+    }
+
     function InvoiceCalc({ form }) {
       const m = invoiceMath(form);
       const isPct = (v) => /%$/.test(String(v || '').trim());
@@ -3819,6 +3879,11 @@
       if (isInv && isNewRec && blank.package_id && !num0(blank.amount) && pkPrice(blank.package_id) != null) blank.amount = pkPrice(blank.package_id);
       const [form, setForm] = useState(blank);
       const [saving, setSaving] = useState(false);
+      const canBill = cfg.key === 'payments' && isNewRec && can(CUR_PERMS, 'invoices', 'a');
+      const [bill, setBillRaw] = useState({ on:false, items:[{ product_id:'', name:'', qty:1, price:'' }], discount:'0', tax:'0', saveNew:true });
+      const [amtTouched, setAmtTouched] = useState(false);
+      // while billing, "amount received" follows the bill total until the user types their own amount (partial payment)
+      const setBill = (fn) => setBillRaw(prev => { const nb = typeof fn === 'function' ? fn(prev) : fn; if (nb.on && !amtTouched) setForm(fp => ({ ...fp, amount: billMath(nb).total })); return nb; });
       const set = (n, v) => setForm(prev => {
         const next = { ...prev, [n]: v };
         if (isInv) {   // customer → their plan, plan → its price (only if amount not typed by hand)
@@ -3834,6 +3899,11 @@
         setSaving(true);
         let out = form;
         if (isInv) { const m = invoiceMath(form); out = { ...form, amount: m.amount, discount: m.discount, tax: m.tax }; }
+        if (canBill && bill.on) {
+          const items = bill.items.filter(it => String(it.name || '').trim() && num0(it.qty) > 0);
+          if (!items.length) { setSaving(false); Swal.fire({ icon:'warning', title:'Add an item', text:'Add at least one item to the bill, or switch billing off.' }); return; }
+          out = { ...form, invoice_id:'', __bill:{ items, discount:bill.discount, tax:bill.tax, saveNew:!!bill.saveNew } };
+        }
         Promise.resolve(onSave(out)).finally(() => setSaving(false));
       };
       return (
@@ -3849,8 +3919,15 @@
                   onPick={(iv) => setForm(prev => ({ ...prev, invoice_id: iv.id || '', amount: iv.balance }))} />
               )}
               <form onSubmit={submit}>
+                {canBill && (
+                  <label style={{ display:'flex', alignItems:'center', gap:10, margin:'0 0 12px', padding:'10px 12px', background:'#f6f8fc', borderRadius:10, cursor:'pointer', fontSize:14 }}>
+                    <input type="checkbox" checked={bill.on} onChange={(e) => setBill(b => ({ ...b, on:e.target.checked }))} style={{ width:18, height:18 }} />
+                    <span><b><i className="fas fa-cash-register"></i> Create a bill with items</b> — products, quantity, discount & GST; saves the bill + this payment together</span>
+                  </label>
+                )}
+                {canBill && bill.on && <BillBuilder bill={bill} setBill={setBill} lookups={lookups} />}
                 <div className="form-grid">
-                  {cfg.fields.map(f => <EntityField key={f.n} f={f} form={form} value={form[f.n]} onChange={(v) => set(f.n, v)} lookups={lookups} />)}
+                  {cfg.fields.filter(f => !(canBill && bill.on && f.n === 'invoice_id')).map(f => <EntityField key={f.n} f={f} form={form} value={form[f.n]} onChange={(v) => { if (f.n === 'amount') setAmtTouched(true); set(f.n, v); }} lookups={lookups} />)}
                 </div>
                 {isInv && <InvoiceCalc form={form} />}
                 <div className="form-actions">
@@ -4645,6 +4722,7 @@
     function MainContent({ activeMenu, user, email, role, perms, canEditRbac, onSettingsUpdate, onNav }) {
       const lookups = useLookups(user);
       if (lookups && lookups.whatsapp) WA = lookups.whatsapp;
+      LK = lookups; CUR_PERMS = perms;
       if (MODULES[activeMenu]) {
         const cfg = MODULES[activeMenu];
         return can(perms, cfg.page, 'v') ? <EntityView key={cfg.key} cfg={cfg} currentUser={user} perms={perms} lookups={lookups} /> : <NoAccessView />;
