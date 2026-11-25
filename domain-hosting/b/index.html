@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Your bill — AR Medias CRM</title>
+  <link rel="icon" type="image/png" href="/logo.png">
+  <style>html,body{margin:0;height:100%;background:#f4f5f7} iframe{position:fixed;inset:0;width:100%;height:100%;border:0}</style>
+</head>
+<body>
+  <!-- Bill / receipt link: shows the document live from the CRM (nothing is stored as a file) -->
+  <iframe id="doc" title="Bill"></iframe>
+  <script src="/config.js"></script>
+  <script>
+    var u = window.ARMEDIAS_APP_URL || '';
+    if (/^https:\/\/script\.google\.com\//.test(u) && /[?&]s=/.test(location.search)) document.getElementById('doc').src = u + location.search;
+    else document.body.innerHTML = '<p style="font-family:Arial;padding:40px;text-align:center;color:#555">This link is not valid.</p>';
+  </script>
+</body>
+</html>

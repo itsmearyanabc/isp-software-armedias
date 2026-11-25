@@ -171,15 +171,35 @@
       );
     }
 
+    // where the client's data lives: your Drive (default) or the client's own empty Google Sheet
+    function StorageChoice({ f, setF, appEmail }) {
+      const own = f.storage === 'own';
+      return (
+        <div className="full" style={{ border:'1px solid var(--line)', borderRadius:10, padding:'10px 12px', marginBottom:14 }}>
+          <label style={{ fontSize:13, fontWeight:700, color:'#555' }}>Where should this client's data be stored?</label>
+          <label className="chk" style={{ margin:'8px 0 4px' }}><input type="radio" checked={!own} onChange={() => setF({ ...f, storage:'mine', sheet_url:'' })} /> In my Drive (automatic)</label>
+          <label className="chk" style={{ margin:'4px 0' }}><input type="radio" checked={own} onChange={() => setF({ ...f, storage:'own' })} /> In the client's own Google Drive</label>
+          {own && <>
+            <div className="hint" style={{ margin:'6px 0 8px', lineHeight:1.6 }}>Ask the client to: open <b>sheets.new</b> (creates an empty Google Sheet) → <b>Share</b> → add <b style={{ userSelect:'all' }}>{appEmail || 'your app account'}</b> as <b>Editor</b> → send you the link.
+              {appEmail && <> <button type="button" className="btn btn-light btn-sm" style={{ padding:'2px 8px', minHeight:0 }} onClick={() => copyText(appEmail)}><i className="fas fa-copy"></i></button></>}</div>
+            <input value={f.sheet_url || ''} onChange={(e) => setF({ ...f, sheet_url:e.target.value })} placeholder="https://docs.google.com/spreadsheets/d/…" style={{ width:'100%', padding:'10px 12px', border:'1px solid #cfd4db', borderRadius:9 }} />
+            <div className="hint">The sheet must be empty — the app never overwrites existing data.</div>
+          </>}
+        </div>
+      );
+    }
+
     // ============== Create / edit client ==============
-    function TenantForm({ tenant, onClose, onSaved }) {
+    function TenantForm({ tenant, appEmail, onClose, onSaved }) {
       const isNew = !tenant;
       const [f, setF] = useState(tenant ? { ...tenant } : { tenant_id:'', company_name:'', owner_name:'', phone:'', email:'', city:'', address:'', plan:'Standard',
         monthly_fee:'', max_customers:'0', max_users:'0', start_date:today(), months:'1', expiry_date:'', notes:'', admin_username:'admin', admin_password:genPass(), demo:false, timezone:'Asia/Karachi', business_type:'general' });
       const [busy, setBusy] = useState(false);
       const set = (k) => (e) => setF({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value });
       const save = (e) => {
-        e.preventDefault(); setBusy(true);
+        e.preventDefault();
+        if (isNew && f.storage === 'own' && !String(f.sheet_url || '').trim()) return Swal.fire({ icon:'warning', title:'Paste the client\'s Google Sheet link' });
+        setBusy(true);
         const p = isNew ? call('createTenant', { ...f, tenant_id: String(f.tenant_id).toUpperCase() }) : call('updateTenant', tenant.tenant_id, f);
         p.then(r => { setBusy(false); if (r && r.success) onSaved(r, f); else toast(r); }).catch(err => { setBusy(false); Swal.fire({ icon:'error', title:'Error', text:err.message }); });
       };
@@ -213,6 +233,7 @@
                 {inp('admin_username', 'Username *', { required:true })}
                 <div className="fg"><label>Password *</label><div style={{ display:'flex', gap:6 }}><input value={f.admin_password} onChange={set('admin_password')} required minLength={6} /><button type="button" className="btn btn-light btn-sm" onClick={() => setF({ ...f, admin_password: genPass() })} title="Generate"><i className="fas fa-dice"></i></button></div></div>
                 <label className="chk full"><input type="checkbox" checked={!!f.demo} onChange={set('demo')} /> Load demo data (sample customers, invoices, payments — good for a trial)</label>
+                <StorageChoice f={f} setF={setF} appEmail={appEmail} />
               </>}
               <div className="fg full"><label>Notes (only you see this)</label><textarea rows={2} value={f.notes || ''} onChange={set('notes')}></textarea></div>
             </div>
@@ -238,11 +259,13 @@
     }
 
     // ============== Approve a sign-up ==============
-    function ApproveModal({ t, appUrl, onClose, onDone }) {
+    function ApproveModal({ t, appUrl, appEmail, onClose, onDone }) {
       const [f, setF] = useState({ plan:'Standard', monthly_fee:'', months:'1', max_customers:'0', max_users:'0', demo:false, business_type:t.business_type || 'general' });
       const [busy, setBusy] = useState(false);
       const set = (k) => (e) => setF({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value });
-      const go = (e) => { e.preventDefault(); setBusy(true);
+      const go = (e) => { e.preventDefault();
+        if (f.storage === 'own' && !String(f.sheet_url || '').trim()) return Swal.fire({ icon:'warning', title:'Paste the client\'s Google Sheet link' });
+        setBusy(true);
         call('approveTenant', t.tenant_id, f).then(r => { setBusy(false); if (r && r.success) onDone({ ...r, approved:true, appUrl }); else toast(r); }).catch(() => setBusy(false)); };
       return (
         <Modal title={'Approve ' + t.company_name} icon="fa-circle-check" onClose={onClose}>
@@ -260,6 +283,7 @@
               <div className="fg"><label>Max customers (0 = unlimited)</label><input type="number" value={f.max_customers} onChange={set('max_customers')} /></div>
               <div className="fg"><label>Max staff logins (0 = unlimited)</label><input type="number" value={f.max_users} onChange={set('max_users')} /></div>
               <label className="chk"><input type="checkbox" checked={f.demo} onChange={set('demo')} /> Load demo data</label>
+              <StorageChoice f={f} setF={setF} appEmail={appEmail} />
             </div>
             <button className="btn btn-ok" disabled={busy}>{busy ? <><i className="fas fa-spinner fa-spin"></i> Creating their database… (up to a minute)</> : <><i className="fas fa-check"></i> Approve & activate</>}</button>
           </form>
@@ -288,6 +312,7 @@
           <div className="info">
             <div><b>Status</b>{stateBadge(t)}</div>
             <div><b>Business type</b>{BIZ[t.business_type] || BIZ.isp}</div>
+            <div><b>Data stored in</b>{t.own_drive ? <span className="b b-ok">Client's Drive · {t.storage_owner}</span> : <span className="b b-n">Your Drive</span>}</div>
             <div><b>Owner</b>{t.owner_name || '—'}</div>
             <div><b>Phone</b>{t.phone || '—'}</div>
             <div><b>Email</b>{t.email || '—'}</div>
@@ -411,11 +436,11 @@
               </table>
             </div>
           </div>
-          {form && <TenantForm tenant={form === 'new' ? null : form} onClose={() => setForm(null)}
+          {form && <TenantForm tenant={form === 'new' ? null : form} appEmail={data.appEmail} onClose={() => setForm(null)}
             onSaved={(r, vals) => { const wasNew = form === 'new'; setForm(null); reload();
               if (wasNew) setCreds({ ...r, company: vals.company_name, phone: vals.phone }); else toast(r, 'Saved'); }} />}
           {creds && <CredsModal c={creds} onClose={() => setCreds(null)} />}
-          {approve && <ApproveModal t={approve} appUrl={data.appUrl} onClose={() => setApprove(null)} onDone={(r) => { setApprove(null); reload(); setCreds(r); }} />}
+          {approve && <ApproveModal t={approve} appUrl={data.appUrl} appEmail={data.appEmail} onClose={() => setApprove(null)} onDone={(r) => { setApprove(null); reload(); setCreds(r); }} />}
           {detail && <TenantDetail code={detail} appUrl={data.appUrl} onClose={() => setDetail(null)} onChanged={reload} />}
         </>
       );

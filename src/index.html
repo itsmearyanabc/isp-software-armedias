@@ -3242,16 +3242,24 @@
       window.open(waLink(phone, msg), '_blank');
       Swal.fire({ toast:true, position:'top-end', icon:'info', title:'PDF downloaded — attach it in the WhatsApp chat', showConfirmButton:false, timer:5000 });
     };
-    // kind: 'receipt' | 'invoice' · makeMsg(meta) builds the WhatsApp text from the server's details
+    // kind: 'receipt' | 'invoice'. Every document has a permanent private link (rendered live — nothing stored).
+    // WhatsApp = message + link in one tap · Download PDF = file made on the click.
     const pdfToWhatsApp = (kind, id, phone, who, makeMsg, currentUser) => {
-      Swal.fire({ title:'Preparing PDF…', allowOutsideClick:false, didOpen:() => Swal.showLoading() });
-      gsRun('pdfFile', currentUser, kind, id).then(x => {
+      Swal.fire({ title:'Preparing…', allowOutsideClick:false, didOpen:() => Swal.showLoading() });
+      gsRun('docInfo', currentUser, kind, id).then(x => {
         if (!x || !x.success) return Swal.fire({ icon:'error', title:'Error', text:(x && x.message) || 'Failed' });
-        const file = b64ToFile(x.b64, x.name), msg = makeMsg(x);
-        Swal.fire({ icon:'success', title:(kind === 'receipt' ? 'Receipt' : 'Bill') + ' PDF ready', html:'Send <b>' + esc(x.name) + '</b> to <b>' + esc(who) + '</b>.<br><span style="font-size:13px;color:#777">Nothing is saved to any storage — the PDF is made just now.</span>',
+        const msg = makeMsg(x), label = kind === 'receipt' ? 'Receipt' : 'Bill';
+        Swal.fire({ icon:'success', title:label + ' ready to send', html:'<div style="font-size:14px">Send to <b>' + esc(who) + '</b> with a link to view &amp; download the ' + label.toLowerCase() + '.</div>' +
+              '<div style="margin-top:8px;font-size:12px;word-break:break-all"><a href="' + esc(x.link) + '" target="_blank" rel="noopener">' + esc(x.link) + '</a></div>',
             showCancelButton:true, showDenyButton:true, confirmButtonText:'<i class="fab fa-whatsapp"></i> Send on WhatsApp', confirmButtonColor:'#1e7e34',
             denyButtonText:'<i class="fas fa-download"></i> Download PDF', denyButtonColor:'#3455b0', cancelButtonText:'Close' })
-          .then(res => { if (res.isConfirmed) sharePdfWA(file, phone, msg); else if (res.isDenied) savePdf(file); });
+          .then(res => {
+            if (res.isConfirmed) { if (telDigits(phone)) window.open(waLink(phone, msg), '_blank'); else Swal.fire({ icon:'info', title:'No phone number', text:'Add the customer\'s phone number first.' }); }
+            else if (res.isDenied) {
+              Swal.fire({ toast:true, position:'top-end', icon:'info', title:'Making PDF…', showConfirmButton:false, timer:2000 });
+              gsRun('pdfFile', currentUser, kind, id).then(f => { if (f && f.success) savePdf(b64ToFile(f.b64, f.name)); else Swal.fire({ icon:'error', title:'Error', text:(f && f.message) || 'Failed' }); });
+            }
+          });
       }).catch(err => Swal.fire({ icon:'error', title:'Error', text:err.message }));
     };
 
@@ -3271,7 +3279,7 @@
         return [`Dear ${name},`, `Thank you! We have received your payment.`, ``,
           `Receipt: ${row.receipt_number}`, d ? `Date: ${d}` : '', `Amount: ${fmtMoney(row.amount)} (${String(row.payment_method || '').replace(/_/g, ' ')})`,
           x.invoice_number ? `Against bill: ${x.invoice_number}` : '', bal > 0.009 ? `Balance remaining: ${fmtMoney(bal)}` : `Your account is now clear.`, ``,
-          `Your receipt (PDF) is attached.`, `— ${P.company || ''}`].filter(l => l !== null).filter((l, i, a) => !(l === '' && (i === 0 || a[i - 1] === ''))).join('\n');
+          `View / download your receipt: ${x.link}`, `— ${P.company || ''}`].filter(l => l !== null).filter((l, i, a) => !(l === '' && (i === 0 || a[i - 1] === ''))).join('\n');
       }, currentUser);
     };   // official WhatsApp API status for this company (from lookups)
     // after a NEW invoice is saved: ASK whether to send the bill on WhatsApp (sends without asking only if the company ticked auto-send).
@@ -3303,7 +3311,7 @@
           if (WA.enabled) return viaApi();
           if (!telDigits(phone)) return Swal.fire({ icon:'info', title:'No phone number', text:'This customer has no phone number on file.' });
           pdfToWhatsApp('invoice', invId, phone, custName(lk, f.customer_id), (x) => [`Dear ${custName(lk, f.customer_id)},`, ``,
-            `Your bill ${x.invoice_number} for ${fmtMoney(x.total)} is ready${x.due_date ? ' (due ' + x.due_date + ')' : ''}.`, `The bill (PDF) is attached.`, ``,
+            `Your bill ${x.invoice_number} for ${fmtMoney(x.total)} is ready${x.due_date ? ' (due ' + x.due_date + ')' : ''}.`, `View / download your bill: ${x.link}`, ``,
             `Thank you for your business — ${P.company || ''}`].join('\n'), currentUser);
         });
       return true;
@@ -4139,7 +4147,7 @@
         if (a.type === 'form') { setQuickForm({ module: a.module, initial: a.prefill ? a.prefill(row, lk) : {} }); return; }
         if (a.type === 'print') { printDoc(a.doc, row, lk); return; }
         if (a.type === 'receipt') { sendReceiptWA(row, currentUser, lk); return; }
-        if (a.type === 'billpdf') { const nm = custName(lk, row.customer_id); pdfToWhatsApp('invoice', row.id, custPhone(lk, row.customer_id), nm, (x) => [`Dear ${nm},`, ``, `Your bill ${x.invoice_number} for ${fmtMoney(x.total)} is ready${x.due_date ? ' (due ' + x.due_date + ')' : ''}.`, `The bill (PDF) is attached.`, ``, `Thank you for your business — ${P.company || ''}`].join('\n'), currentUser); return; }
+        if (a.type === 'billpdf') { const nm = custName(lk, row.customer_id); pdfToWhatsApp('invoice', row.id, custPhone(lk, row.customer_id), nm, (x) => [`Dear ${nm},`, ``, `Your bill ${x.invoice_number} for ${fmtMoney(x.total)} is ready${x.due_date ? ' (due ' + x.due_date + ')' : ''}.`, `View / download your bill: ${x.link}`, ``, `Thank you for your business — ${P.company || ''}`].join('\n'), currentUser); return; }
         if (a.type === 'set') {
           const apply = () => {
             mutate(d => (d && d.data) ? { ...d, data: d.data.map(x => String(x.id) === String(row.id) ? { ...x, [a.field]: a.value } : x) } : d, false);

@@ -16,6 +16,8 @@ var MASTER_DEFAULT_PASS = 'Armedias@123';   // used ONLY on first login; you are
 // Your own client login address (e.g. 'https://isp.armedias.com'). Leave '' to use the Google script link.
 // Used in the login details you copy/WhatsApp to clients and in approval emails.
 var PUBLIC_LOGIN_URL = 'https://crm.armedias.com/app';
+// Public address of bill / receipt links sent to customers (see domain-hosting/b). Leave '' to use the Google script link.
+var PUBLIC_DOC_URL = 'https://crm.armedias.com/b';
 function loginUrl_() { return PUBLIC_LOGIN_URL || ScriptApp.getService().getUrl(); }
 var T_COLS = ['tenant_id','company_name','owner_name','phone','email','city','address','spreadsheet_id','plan','monthly_fee',
               'max_customers','max_users','start_date','expiry_date','status','notes','admin_username','created_at','updated_at',
@@ -171,7 +173,7 @@ function m_overview_() {
     if (t.state === 'active') k.mrr += num(t.monthly_fee);
   });
   rows.sort(function(a, b){ return String(b.created_at).localeCompare(String(a.created_at)); });
-  return { success:true, data:{ tenants: rows, kpis: k, appUrl: loginUrl_() } };
+  return { success:true, data:{ tenants: rows, kpis: k, appUrl: loginUrl_(), appEmail: appEmail_() } };
 }
 
 function cleanTenantFields_(t, d) {
@@ -201,7 +203,9 @@ function m_createTenant_(d) {
     if (!t.expiry_date) t.expiry_date = addMonths_(start, Math.max(1, num(d.months) || 1));
     t.admin_username = user; t.created_at = nowIso(); t.updated_at = t.created_at; t.is_deleted = '0';
 
-    var ss = provisionTenant_(t, user, pass, !!d.demo, d.timezone, bizType_(d.business_type));
+    var ss;
+    try { ss = provisionTenant_(t, user, pass, !!d.demo, d.timezone, bizType_(d.business_type), d.sheet_url); }
+    catch (e) { return { success:false, message:e.message }; }
     writeTenant_(t);
     mlog_('Client Created', code, t.company_name + ' · owner login: ' + user + (d.demo ? ' · with demo data' : ''));
     return { success:true, message:'Client created', tenant_id:code, admin_username:user, admin_password:pass,
@@ -209,13 +213,36 @@ function m_createTenant_(d) {
   } finally { lock.releaseLock(); }
 }
 
-// create the client's own database spreadsheet in your Drive folder and fill it
-function provisionTenant_(t, user, pass, demo, tz, btype) {
-  var ss = SpreadsheetApp.create(APP_NAME + ' — ' + t.company_name + ' (' + t.tenant_id + ')');
+// ---- "Bring your own Google Sheet": the client's data lives in THEIR Drive ----
+function appEmail_() { try { return Session.getEffectiveUser().getEmail(); } catch (e) { return ''; } }
+function sheetIdFromUrl_(u) {
+  u = String(u || '').trim(); var m = u.match(/\/d\/([a-zA-Z0-9_-]{20,})/);
+  return m ? m[1] : (/^[a-zA-Z0-9_-]{25,}$/.test(u) ? u : '');
+}
+// open the client's sheet and make sure it is EMPTY (we never overwrite anyone's data)
+function clientSheet_(url) {
+  var id = sheetIdFromUrl_(url);
+  if (!id) throw new Error('That does not look like a Google Sheets link.');
+  if (tenantRows_().some(function(x){ return x.spreadsheet_id === id; })) throw new Error('That sheet is already used by another client.');
+  var ss; try { ss = SpreadsheetApp.openById(id); } catch (e) { throw new Error('Cannot open that sheet. Ask the client to share it with ' + appEmail_() + ' as Editor, then try again.'); }
+  var used = ss.getSheets().some(function(sh){ return sh.getLastRow() > 0 || sh.getLastColumn() > 0; });
+  if (used) throw new Error('That sheet already contains data. To protect the client\'s data, ask them to share a NEW, empty Google Sheet.');
+  return ss;
+}
+
+// create the client's database — in your Drive folder, or inside the client's own empty sheet (sheetUrl)
+function provisionTenant_(t, user, pass, demo, tz, btype, sheetUrl) {
+  var ss;
+  if (sheetUrl) {
+    ss = clientSheet_(sheetUrl);
+    try { ss.rename(APP_NAME + ' — ' + t.company_name + ' (' + t.tenant_id + ')'); } catch (e) {}
+  } else {
+    ss = SpreadsheetApp.create(APP_NAME + ' — ' + t.company_name + ' (' + t.tenant_id + ')');
+    var folders = DriveApp.getFoldersByName(TENANT_FOLDER_NAME);
+    var folder = folders.hasNext() ? folders.next() : DriveApp.createFolder(TENANT_FOLDER_NAME);
+    DriveApp.getFileById(ss.getId()).moveTo(folder);
+  }
   try { ss.setSpreadsheetTimeZone(tz || masterTz_()); } catch (e) {}
-  var folders = DriveApp.getFoldersByName(TENANT_FOLDER_NAME);
-  var folder = folders.hasNext() ? folders.next() : DriveApp.createFolder(TENANT_FOLDER_NAME);
-  DriveApp.getFileById(ss.getId()).moveTo(folder);
   t.spreadsheet_id = ss.getId();
   buildTenantDb_(ss, { tid: t.tenant_id, tenant: t, demo: !!demo, business_type: btype,
     admin: { username:user, password:pass, email:t.email, name:t.owner_name, phone:t.phone },
@@ -272,7 +299,8 @@ function m_approveTenant_(code, d) {
     t.start_date = start;
     t.expiry_date = addMonths_(start, Math.max(1, num(d.months) || 1));
     t.status = 'active'; t.updated_at = nowIso();
-    provisionTenant_(t, t.admin_username, pass, !!d.demo, d.timezone, bizType_(d.business_type || props.getProperty('BT:' + t.tenant_id)));
+    try { provisionTenant_(t, t.admin_username, pass, !!d.demo, d.timezone, bizType_(d.business_type || props.getProperty('BT:' + t.tenant_id)), d.sheet_url); }
+    catch (e) { return { success:false, message:e.message }; }
     writeTenant_(t);
     props.deleteProperty('PW:' + t.tenant_id); props.deleteProperty('BT:' + t.tenant_id);
   } finally { lock.releaseLock(); }
@@ -350,6 +378,7 @@ function computeStats_(t) {
   for (var i = 1; i < ud.length; i++) { if (Number(ud[i][15]) === 1) continue; users++; if (ud[i][4] === 'Active') activeUsers++; }
   var lg = db_().getSheetByName(LOGS_SHEET), lastAct = '';
   if (lg && lg.getLastRow() > 1) lastAct = isoIfDate_(lg.getRange(lg.getLastRow(), 1).getValue());
+  try { var hashed = hashPlainPasswords_(); if (hashed) addLog('Armedias', 'Security', hashed + ' staff password(s) secured (hashed)'); } catch (e) {}
   var s = {
     customers: custs.length,
     active: custs.filter(function(c){ return c.connection_status === 'active'; }).length,
@@ -398,6 +427,8 @@ function m_tenantDetail_(code) {
   }
   CTX = null;
   var out = publicTenant_(t); out.stats = stats;
+  try { var own = DriveApp.getFileById(t.spreadsheet_id).getOwner(); out.storage_owner = own ? own.getEmail() : ''; } catch (e) { out.storage_owner = ''; }
+  out.own_drive = !!out.storage_owner && out.storage_owner !== appEmail_();
   return { success:true, data:{ tenant: out, users: users, logs: logs } };
 }
 
@@ -408,7 +439,7 @@ function m_resetUserPassword_(code, username, newPass) {
   var sh = db_().getSheetByName(USERS_SHEET), data = sh.getDataRange().getValues();
   for (var i = 1; i < data.length; i++) {
     if (String(data[i][0]) !== String(username)) continue;
-    sh.getRange(i + 1, 3).setValue(String(newPass));
+    sh.getRange(i + 1, 3).setNumberFormat('@').setValue(pwHash_(String(newPass)));
     sh.getRange(i + 1, 11).setValue(nowIso());
     sh.getRange(i + 1, 12).setValue('Armedias');
     addLog('Armedias', 'Password Reset', 'Reset by Armedias for: ' + username);

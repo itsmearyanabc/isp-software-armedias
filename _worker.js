@@ -5,6 +5,8 @@ const MAP = {
   '/app/': '/domain-hosting/app/',
   '/robots.txt': '/domain-hosting/robots.txt',
   '/favicon.ico': '/domain-hosting/logo.png',
+  '/b': '/domain-hosting/b/',
+  '/b/': '/domain-hosting/b/',
   '/admin': '/domain-hosting/admin/',
   '/admin/': '/domain-hosting/admin/',
   '/config.js': '/domain-hosting/config.js',
@@ -19,7 +21,7 @@ export default {
     const h = new Headers(res.headers);
     h.set('X-Content-Type-Options', 'nosniff');
     h.set('Referrer-Policy', 'strict-origin-when-cross-origin');
-    if (url.pathname.startsWith('/admin') || url.pathname.startsWith('/app')) h.set('X-Robots-Tag', 'noindex, nofollow');
+    if (url.pathname.startsWith('/admin') || url.pathname.startsWith('/app') || url.pathname.startsWith('/b')) h.set('X-Robots-Tag', 'noindex, nofollow');
     if (url.pathname === '/config.js') h.set('Cache-Control', 'no-cache');
     return new Response(res.body, { status: res.status, headers: h });
   }

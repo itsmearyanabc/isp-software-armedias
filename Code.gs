@@ -115,6 +115,7 @@ function rbacDefaultPerms_(roleKey) {
 // <app url>?master     → Armedias Master Console (master.html)
 function doGet(e) {
   var p = (e && e.parameter) || {};
+  if (p.k && p.s) return renderDoc_(p);   // public bill / receipt link
   var isMaster = Object.prototype.hasOwnProperty.call(p, 'master');
   var t = HtmlService.createTemplateFromFile(isMaster ? 'master' : 'index');
   t.appUrlJson = JSON.stringify(ScriptApp.getService().getUrl() || '');
@@ -149,7 +150,7 @@ var API_CALLER = {
   getCustomer360:0, getUserActivity:0, resetUserPassword:0, getSettings:0, saveSettings:0,
   childRead:0, childInsert:0, childDelete:0,
   listApiKeys:0, createApiKey:0, revokeApiKey:0,
-  getWhatsAppConfig:0, saveWhatsAppConfig:0, testWhatsApp:0, sendInvoiceWhatsApp:0, sendInvoiceEmail:0, sendReceiptWhatsApp:0, pdfFile:0
+  getWhatsAppConfig:0, saveWhatsAppConfig:0, testWhatsApp:0, sendInvoiceWhatsApp:0, sendInvoiceEmail:0, sendReceiptWhatsApp:0, pdfFile:0, docInfo:0
 };
 
 function api(token, fn, args) {
@@ -173,6 +174,23 @@ function api(token, fn, args) {
   }
 }
 
+// staff passwords are stored hashed: h1$<salt>$<sha256>. Old plain-text values still work and are upgraded on next login.
+function pwHash_(p) { var salt = Utilities.getUuid().replace(/-/g, '').slice(0, 16); return 'h1$' + salt + '$' + hash_(String(p), salt); }
+function pwIsHashed_(stored) { return /^h1\$[a-f0-9]{16}\$/.test(String(stored || '')); }
+function pwCheck_(stored, p) {
+  stored = String(stored == null ? '' : stored);
+  if (pwIsHashed_(stored)) { var parts = stored.split('$'); return hash_(String(p), parts[1]) === parts.slice(2).join('$'); }
+  return stored !== '' && stored === String(p);
+}
+// hash any plain-text staff passwords in the current company's Users sheet
+function hashPlainPasswords_() {
+  var sh = db_().getSheetByName(USERS_SHEET); if (!sh || sh.getLastRow() < 2) return 0;
+  var rg = sh.getRange(2, 3, sh.getLastRow() - 1, 1), v = rg.getValues(), n = 0;
+  for (var i = 0; i < v.length; i++) if (v[i][0] !== '' && !pwIsHashed_(v[i][0])) { v[i][0] = pwHash_(v[i][0]); n++; }
+  if (n) { rg.setNumberFormat('@'); rg.setValues(v); }
+  return n;
+}
+
 function logout(token) { sessDrop_(token); return { success:true }; }
 
 // ============== Authentication ==============
@@ -190,8 +208,9 @@ function authenticateUser(companyId, username, password) {
       if (String(data[i][0]) !== username) continue;
       if (Number(data[i][15]) === 1) { addLog(username, 'Login Failed', 'Account removed'); return { success:false, message:'Username not found' }; }
       if (data[i][4] !== 'Active') { addLog(username, 'Login Failed', 'Account is inactive'); return { success:false, message:'Account is inactive. Please contact administrator.' }; }
-      if (password !== String(data[i][2])) { addLog(username, 'Login Failed', 'Invalid password'); return { success:false, message:'Invalid password' }; }
+      if (!pwCheck_(data[i][2], password)) { addLog(username, 'Login Failed', 'Invalid password'); return { success:false, message:'Invalid password' }; }
       sheet.getRange(i + 1, 17).setValue(nowIso()); // LastLogin
+      if (!pwIsHashed_(data[i][2])) sheet.getRange(i + 1, 3).setNumberFormat('@').setValue(pwHash_(password)); // upgrade old plain text
       addLog(username, 'Login Success', 'User logged in successfully');
       var token = newToken_();
       sessPut_(token, { t: t.tenant_id, u: username });
@@ -265,7 +284,7 @@ function resetPasswordWithOtp(companyId, identifier, otp, newPassword) {
         var parts = stored.split('|'), code = parts[0], exp = Number(parts[1] || 0);
         if (Date.now() > exp) return { success:false, message:'OTP expired. Request a new one.' };
         if (String(otp).trim() !== code) return { success:false, message:'Invalid OTP' };
-        sheet.getRange(i + 1, 3).setValue(newPassword);
+        sheet.getRange(i + 1, 3).setNumberFormat('@').setValue(pwHash_(newPassword));
         sheet.getRange(i + 1, otpCol + 1).setValue('');
         sheet.getRange(i + 1, 11).setValue(nowIso());
         addLog(data[i][0], 'Password Reset', 'Via OTP');
@@ -309,7 +328,8 @@ function addUser(userData, currentUser) {
       if (live >= maxU) return { success:false, message:'Your plan allows ' + maxU + ' staff users. Contact Armedias to upgrade.' };
     }
     var ts = nowIso();
-    sheet.appendRow([userData.Username, userData.Email, userData.Password, userData.Role || 'collector', userData.Status || 'Active',
+    if (!userData.Password || String(userData.Password).length < 4) return { success:false, message:'Password must be at least 4 characters' };
+    sheet.appendRow([userData.Username, userData.Email, pwHash_(userData.Password), userData.Role || 'collector', userData.Status || 'Active',
       '', 'light', '', ts, currentUser, ts, currentUser, userData.Name || '', userData.Phone || '', userData.AreaId || '', 0, '', '']);
     addLog(currentUser, 'User Added', 'Added user: ' + userData.Username);
     return { success:true, message:'User added successfully!' };
@@ -325,7 +345,7 @@ function updateUser(username, userData, currentUser) {
     for (var i = 1; i < data.length; i++) {
       if (String(data[i][0]) !== String(username)) continue;
       sheet.getRange(i + 1, 2).setValue(userData.Email);
-      if (userData.Password && String(userData.Password).trim() !== '') sheet.getRange(i + 1, 3).setValue(userData.Password);
+      if (userData.Password && String(userData.Password).trim() !== '') sheet.getRange(i + 1, 3).setNumberFormat('@').setValue(pwHash_(userData.Password));
       sheet.getRange(i + 1, 4).setValue(userData.Role);
       sheet.getRange(i + 1, 5).setValue(userData.Status);
       if (userData.Name !== undefined)   sheet.getRange(i + 1, 13).setValue(userData.Name);
@@ -367,9 +387,9 @@ function updateMyAccount(username, formData) {
     var data = sheet.getDataRange().getValues();
     for (var i = 1; i < data.length; i++) {
       if (String(data[i][0]) !== String(username)) continue;
-      if (String(formData.CurrentPassword) !== String(data[i][2])) return { success:false, message:'Current password is incorrect' };
+      if (!pwCheck_(data[i][2], formData.CurrentPassword)) return { success:false, message:'Current password is incorrect' };
       sheet.getRange(i + 1, 2).setValue(formData.Email);
-      if (formData.NewPassword && String(formData.NewPassword).trim() !== '') sheet.getRange(i + 1, 3).setValue(formData.NewPassword);
+      if (formData.NewPassword && String(formData.NewPassword).trim() !== '') sheet.getRange(i + 1, 3).setNumberFormat('@').setValue(pwHash_(formData.NewPassword));
       sheet.getRange(i + 1, 11).setValue(nowIso());
       sheet.getRange(i + 1, 12).setValue(username);
       addLog(username, 'Profile Updated', 'Updated own profile');
@@ -1221,7 +1241,7 @@ function resetUserPassword(caller, username, newPwd){
   var data = sh.getDataRange().getValues();
   for (var i = 1; i < data.length; i++){
     if (String(data[i][0]) === String(username)){
-      sh.getRange(i+1, 3).setValue(newPwd);
+      sh.getRange(i+1, 3).setNumberFormat('@').setValue(pwHash_(newPwd));
       sh.getRange(i+1, 11).setValue(nowIso());
       sh.getRange(i+1, 12).setValue(caller);
       addLog(caller, 'Password Reset', 'Reset password for: ' + username);
@@ -1463,7 +1483,7 @@ function testWhatsApp(caller) {
   catch (e) { return { success:false, message:e.message }; }
 }
 
-function invoicePdf_(inv, cust, co) {
+function invoiceHtml_(inv, cust, co) {
   var e = function(v){ return String(v == null ? '' : v).replace(/[&<>"]/g, function(c){ return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]; }); };
   var cur = co.currency || 'INR', m = function(v){ return e(cur) + ' ' + round2(num(v)).toLocaleString('en-IN'); };
   var net = round2(num(inv.amount) - num(inv.discount));
@@ -1478,7 +1498,10 @@ function invoicePdf_(inv, cust, co) {
     row('Amount', m(inv.amount)) + row('Discount', '- ' + m(inv.discount)) + row('Net amount', m(net)) + row('Tax / GST', m(inv.tax)) + row('TOTAL', m(inv.total), true) +
     (num(inv.previous_balance) > 0 ? row('Previous balance', m(inv.previous_balance)) : '') + '</table>' +
     '<p style="margin-top:28px;color:#888;font-size:11px;text-align:center">Thank you — ' + e(co.company_name) + '</p></body></html>';
-  return HtmlService.createHtmlOutput(html).getBlob().getAs('application/pdf').setName((inv.invoice_number || 'invoice') + '.pdf');
+  return html;
+}
+function invoicePdf_(inv, cust, co) {
+  return HtmlService.createHtmlOutput(invoiceHtml_(inv, cust, co)).getBlob().getAs('application/pdf').setName((inv.invoice_number || 'invoice') + '.pdf');
 }
 
 function itemsHtml_(inv, m, e) {
@@ -1519,7 +1542,7 @@ function receiptData_(paymentId) {
   var inv = pay.invoice_id ? readObjs_('Invoices').filter(function(x){ return String(x.id) === String(pay.invoice_id); })[0] : null;
   return { pay:pay, cust:cust, inv:inv || null, co:settingsMap_() };
 }
-function receiptPdf_(r) {
+function receiptHtml_(r) {
   var e = function(v){ return String(v == null ? '' : v).replace(/[&<>"]/g, function(c){ return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]; }); };
   var cur = r.co.currency || 'INR', m = function(v){ return e(cur) + ' ' + round2(num(v)).toLocaleString('en-IN'); };
   var row = function(l, v){ return '<tr><td style="padding:10px;border-bottom:1px solid #eee;color:#555">' + l + '</td><td style="padding:10px;border-bottom:1px solid #eee;text-align:right;font-weight:600">' + v + '</td></tr>'; };
@@ -1537,7 +1560,10 @@ function receiptPdf_(r) {
     (r.pay.collected_by ? row('Received by', e(r.pay.collected_by)) : '') +
     row('Balance remaining', bal > 0.009 ? m(bal) : 'Nil — account clear') + '</table>' +
     '<p style="margin-top:28px;color:#888;font-size:11px;text-align:center">Thank you for your payment — ' + e(r.co.company_name) + '<br>This is a computer-generated receipt.</p></body></html>';
-  return HtmlService.createHtmlOutput(html).getBlob().getAs('application/pdf').setName((r.pay.receipt_number || 'receipt') + '.pdf');
+  return html;
+}
+function receiptPdf_(r) {
+  return HtmlService.createHtmlOutput(receiptHtml_(r)).getBlob().getAs('application/pdf').setName((r.pay.receipt_number || 'receipt') + '.pdf');
 }
 
 // official WhatsApp API: the PDF goes straight into the customer's chat (template with a Document header)
@@ -1561,6 +1587,54 @@ function sendReceiptWhatsApp(caller, paymentId) {
     addLog(caller, 'WhatsApp Receipt Failed', r.pay.receipt_number + ': ' + e.message);
     return { success:false, message:'WhatsApp: ' + e.message };
   }
+}
+
+// ============== Permanent bill / receipt links (rendered live, nothing stored) ==============
+// link = <PUBLIC_DOC_URL>?c=<company>&k=<i|r>&id=<id>&s=<signature>. The signature uses a server secret, so links can't be guessed.
+function docSecret_() {
+  var p = PropertiesService.getScriptProperties(), v = p.getProperty('DOC_SECRET');
+  if (!v) { v = Utilities.getUuid() + Utilities.getUuid(); p.setProperty('DOC_SECRET', v); }
+  return v;
+}
+function docSig_(tid, k, id) { return hash_(String(tid) + '|' + k + '|' + id, docSecret_()).replace(/[^A-Za-z0-9]/g, '').slice(0, 24); }
+function docLink_(k, id) {
+  var base = (typeof PUBLIC_DOC_URL !== 'undefined' && PUBLIC_DOC_URL) ? PUBLIC_DOC_URL : ScriptApp.getService().getUrl();
+  return base + '?c=' + encodeURIComponent(CTX.tid) + '&k=' + k + '&id=' + encodeURIComponent(id) + '&s=' + docSig_(CTX.tid, k, id);
+}
+// public page for a bill/receipt link (called from doGet)
+function renderDoc_(p) {
+  var page = function(body, title){ return HtmlService.createHtmlOutput(body).setTitle(title || 'Document')
+      .addMetaTag('viewport', 'width=device-width, initial-scale=1').setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL); };
+  var bad = page('<div style="font-family:Arial;padding:40px;text-align:center;color:#555">This link is not valid or has expired.</div>', 'Not found');
+  var k = String(p.k || ''), id = String(p.id || ''), code = normCode_(p.c);
+  if (['i', 'r'].indexOf(k) === -1 || !/^\d{1,9}$/.test(id) || !code) return bad;
+  if (String(p.s || '') !== docSig_(code, k, id)) return bad;          // check the signature first
+  var t = tenantByCode_(code); if (!t || t.is_deleted === '1' || !t.spreadsheet_id) return bad;
+  enterTenant_(t, null);
+  var html = '', name = 'document';
+  if (k === 'i') {
+    var inv = readObjs_('Invoices').filter(function(x){ return String(x.id) === id; })[0]; if (!inv) return bad;
+    html = invoiceHtml_(inv, custById_(inv.customer_id) || {}, settingsMap_()); name = inv.invoice_number;
+  } else {
+    var r = receiptData_(id); if (!r) return bad;
+    html = receiptHtml_(r); name = r.pay.receipt_number;
+  }
+  var bar = '<div class="noprint" style="font-family:Arial;max-width:760px;margin:16px auto 0;display:flex;gap:10px;justify-content:flex-end">' +
+    '<button onclick="window.print()" style="background:#1e7e34;color:#fff;border:none;border-radius:999px;padding:10px 18px;font-weight:700;cursor:pointer">Print / Save as PDF</button></div>' +
+    '<style>@media print{.noprint{display:none}} body{background:#f4f5f7} .doc{max-width:760px;margin:12px auto 40px;background:#fff;box-shadow:0 4px 20px rgba(0,0,0,.08);border-radius:12px}</style>';
+  return page(bar + '<div class="doc">' + html.replace(/^<html><body[^>]*>/, '').replace(/<\/body><\/html>$/, '') + '</div>', name);
+}
+// fast: link + details for the WhatsApp message (no PDF work)
+function docInfo(caller, kind, id) {
+  if (kind === 'receipt') {
+    if (!gate_(caller, 'payments', 'v')) return { success:false, message:'Access denied' };
+    var r = receiptData_(id); if (!r) return { success:false, message:'Payment not found' };
+    return { success:true, link:docLink_('r', id), name:(r.pay.receipt_number || 'receipt') + '.pdf', balance:round2(num(r.cust.current_balance)), invoice_number:r.inv ? r.inv.invoice_number : '' };
+  }
+  if (!gate_(caller, 'invoices', 'v')) return { success:false, message:'Access denied' };
+  var inv = readObjs_('Invoices').filter(function(x){ return String(x.id) === String(id); })[0];
+  if (!inv) return { success:false, message:'Invoice not found' };
+  return { success:true, link:docLink_('i', id), name:inv.invoice_number + '.pdf', invoice_number:inv.invoice_number, total:round2(num(inv.total)), due_date:ymd_(inv.due_date) };
 }
 
 // PDF built in memory and returned to the browser (download / share) — nothing is stored in Drive
@@ -1672,7 +1746,7 @@ function buildTenantDb_(ss, opts) {
     mk('Settings',             ['Key','Value']);
 
     // owner login (the credentials you give the client)
-    usersSheet.appendRow([A.username, A.email || '', A.password, 'super_admin', 'Active', '', 'light', '', ts, 'Armedias', ts, 'Armedias', A.name || '', A.phone || '', '', 0, '', '']);
+    usersSheet.appendRow([A.username, A.email || '', pwHash_(A.password), 'super_admin', 'Active', '', 'light', '', ts, 'Armedias', ts, 'Armedias', A.name || '', A.phone || '', '', 0, '', '']);
 
     var settingsSheet = ss.getSheetByName('Settings');
     [['company_name', co.name || ''], ['business_type', BT], ['currency','INR'], ['phone_country_code','91'], ['invoice_prefix','INV'], ['support_phone', co.phone || ''], ['whatsapp_number', co.whatsapp || co.phone || ''], ['late_fee_pct','0']]
@@ -1683,7 +1757,7 @@ function buildTenantDb_(ss, opts) {
       // demo staff are created INACTIVE with random passwords — the owner can activate/reset them
       var AD = 'demo_admin', AC = 'demo_accounts', C1 = 'demo_collector1', C2 = 'demo_collector2';
       [[AD,'admin','Operations Lead'],[AC,'accountant','Finance Officer'],[C1,'collector','Field Agent One'],[C2,'collector','Field Agent Two']].forEach(function(u){
-        usersSheet.appendRow([u[0], '', Utilities.getUuid().slice(0, 10), u[1], 'Inactive', '', 'light', '', ts, 'Armedias', ts, 'Armedias', u[2], '', '', 0, '', '']);
+        usersSheet.appendRow([u[0], '', pwHash_(Utilities.getUuid()), u[1], 'Inactive', '', 'light', '', ts, 'Armedias', ts, 'Armedias', u[2], '', '', 0, '', '']);
       });
 
       seedAll('areas', DEMO.areas.map(function(n){ return { name:n, city:'', description:'', status:'active', country:'India' }; }), ts);
