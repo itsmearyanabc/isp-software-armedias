@@ -1590,7 +1590,7 @@ function sendReceiptWhatsApp(caller, paymentId) {
 }
 
 // ============== Permanent bill / receipt links (rendered live, nothing stored) ==============
-// link = <PUBLIC_DOC_URL>?c=<company>&k=<i|r>&id=<id>&s=<signature>. The signature uses a server secret, so links can't be guessed.
+// link = <PUBLIC_DOC_URL>?co=<company>   (note: 'c' and 'sid' are reserved by Apps Script)&k=<i|r>&id=<id>&s=<signature>. The signature uses a server secret, so links can't be guessed.
 function docSecret_() {
   var p = PropertiesService.getScriptProperties(), v = p.getProperty('DOC_SECRET');
   if (!v) { v = Utilities.getUuid() + Utilities.getUuid(); p.setProperty('DOC_SECRET', v); }
@@ -1599,14 +1599,14 @@ function docSecret_() {
 function docSig_(tid, k, id) { return hash_(String(tid) + '|' + k + '|' + id, docSecret_()).replace(/[^A-Za-z0-9]/g, '').slice(0, 24); }
 function docLink_(k, id) {
   var base = (typeof PUBLIC_DOC_URL !== 'undefined' && PUBLIC_DOC_URL) ? PUBLIC_DOC_URL : ScriptApp.getService().getUrl();
-  return base + '?c=' + encodeURIComponent(CTX.tid) + '&k=' + k + '&id=' + encodeURIComponent(id) + '&s=' + docSig_(CTX.tid, k, id);
+  return base + '?co=' + encodeURIComponent(CTX.tid) + '&k=' + k + '&id=' + encodeURIComponent(id) + '&s=' + docSig_(CTX.tid, k, id);
 }
 // public page for a bill/receipt link (called from doGet)
 function renderDoc_(p) {
   var page = function(body, title){ return HtmlService.createHtmlOutput(body).setTitle(title || 'Document')
       .addMetaTag('viewport', 'width=device-width, initial-scale=1').setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL); };
   var bad = page('<div style="font-family:Arial;padding:40px;text-align:center;color:#555">This link is not valid or has expired.</div>', 'Not found');
-  var k = String(p.k || ''), id = String(p.id || ''), code = normCode_(p.c);
+  var k = String(p.k || ''), id = String(p.id || ''), code = normCode_(p.co);
   if (['i', 'r'].indexOf(k) === -1 || !/^\d{1,9}$/.test(id) || !code) return bad;
   if (String(p.s || '') !== docSig_(code, k, id)) return bad;          // check the signature first
   var t = tenantByCode_(code); if (!t || t.is_deleted === '1' || !t.spreadsheet_id) return bad;
