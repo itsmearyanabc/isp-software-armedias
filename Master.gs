@@ -18,6 +18,12 @@ var MASTER_DEFAULT_PASS = 'Armedias@123';   // used ONLY on first login; you are
 var PUBLIC_LOGIN_URL = 'https://crm.armedias.com/app';
 // Public address of bill / receipt links sent to customers (see domain-hosting/b). Leave '' to use the Google script link.
 var PUBLIC_DOC_URL = 'https://crm.armedias.com/b';
+// Self sign-up: true = instant free trial (no approval) · TRIAL_DAYS = length of the trial (sign-up day counts as day 1)
+var AUTO_TRIAL = true;
+var TRIAL_DAYS = 3;
+// plan presets used by the Master Console (0 = unlimited)
+var PLAN_LIMITS = { 'Trial': { users:0, customers:0 }, 'Small Business': { users:3, customers:1000 }, 'Enterprise': { users:0, customers:0 } };
+function addMonthsDays_(ymd, days) { var p = String(ymd).split('-'); return Utilities.formatDate(new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]) + Number(days)), masterTz_(), 'yyyy-MM-dd'); }
 function loginUrl_() { return PUBLIC_LOGIN_URL || ScriptApp.getService().getUrl(); }
 var T_COLS = ['tenant_id','company_name','owner_name','phone','email','city','address','spreadsheet_id','plan','monthly_fee',
               'max_customers','max_users','start_date','expiry_date','status','notes','admin_username','created_at','updated_at',
@@ -98,7 +104,9 @@ function tenantBlock_(t) {
   if (!t.spreadsheet_id) return 'Company ID not found. Please check and try again.';
   if (t.status === 'suspended') return 'This account has been suspended. Please contact Armedias.';
   var d = daysLeft_(t.expiry_date);
-  if (d !== null && d < 0) return 'Subscription expired on ' + t.expiry_date + '. Please contact Armedias to renew.';
+  if (d !== null && d < 0) return t.plan === 'Trial'
+    ? 'Your free trial has ended. Choose a plan to continue — your data is safe and waiting for you.'
+    : 'Your subscription ended on ' + t.expiry_date + '. Renew your plan to continue — your data is safe.';
   return null;
 }
 function touchTenantLogin_(code, user) {
@@ -165,15 +173,16 @@ function publicTenant_(t) {
 
 function m_overview_() {
   var rows = tenantRows_().filter(function(t){ return t.is_deleted !== '1'; }).map(publicTenant_);
-  var k = { total: rows.length, active:0, suspended:0, expired:0, pending:0, expiring:0, customers:0, mrr:0 };
+  var k = { total: rows.length, active:0, suspended:0, expired:0, pending:0, expiring:0, trial:0, customers:0, mrr:0 };
   rows.forEach(function(t){
     k[t.state]++;
     if (t.state === 'active' && t.days_left !== null && t.days_left <= 7) k.expiring++;
+    if (t.state === 'active' && t.plan === 'Trial') k.trial++;
     k.customers += num(t.stats.customers);
     if (t.state === 'active') k.mrr += num(t.monthly_fee);
   });
   rows.sort(function(a, b){ return String(b.created_at).localeCompare(String(a.created_at)); });
-  return { success:true, data:{ tenants: rows, kpis: k, appUrl: loginUrl_(), appEmail: appEmail_() } };
+  return { success:true, data:{ tenants: rows, kpis: k, appUrl: loginUrl_(), appEmail: appEmail_(), planLimits: PLAN_LIMITS } };
 }
 
 function cleanTenantFields_(t, d) {
@@ -263,25 +272,43 @@ function signupCompany(d) {
     if (!/^[A-Z][A-Z0-9]{2,19}$/.test(code)) return { success:false, message:'Company ID must be 3–20 letters/numbers and start with a letter (e.g. FASTNET).' };
     if (!/^[A-Za-z0-9._-]{3,30}$/.test(user)) return { success:false, message:'Username must be 3–30 characters (letters, numbers, . _ -)' };
     if (pass.length < 6) return { success:false, message:'Password must be at least 6 characters' };
-    var lock = LockService.getScriptLock();
+    var ph10 = String(d.phone || '').replace(/\D/g, '').slice(-10), em = String(d.email || '').trim().toLowerCase();
+    var t, lock = LockService.getScriptLock();
     try { lock.waitLock(20000); } catch (e) { return { success:false, message:'System is busy, please try again' }; }
-    try {
-      if (tenantRows_().some(function(t){ return t.tenant_id === code; })) return { success:false, message:'Company ID "' + code + '" is already taken. Please choose another.' };
-      var t = cleanTenantFields_({ tenant_id: code, status:'pending', start_date: mToday_(), plan:'', monthly_fee:'0', max_customers:'0', max_users:'0' },
+    try {   // quick: only reserve the Company ID here — the database is built after the lock is released
+      var rows = tenantRows_();
+      if (rows.some(function(x){ return x.tenant_id === code; })) return { success:false, message:'Company ID "' + code + '" is already taken. Please choose another.' };
+      if (AUTO_TRIAL && rows.some(function(x){ return x.is_deleted !== '1' && ((ph10.length === 10 && String(x.phone).replace(/\D/g, '').slice(-10) === ph10) || (em && String(x.email).toLowerCase() === em)); }))
+        return { success:false, message:'A business with this phone number or email is already registered. Please sign in, or contact AR Medias.' };
+      t = cleanTenantFields_({ tenant_id: code, status:'pending', start_date: mToday_(), plan:'', monthly_fee:'0', max_customers:'0', max_users:'0' },
         { company_name:d.company_name, owner_name:d.owner_name, phone:d.phone, email:d.email, city:d.city, address:d.address });
       t.admin_username = user; t.notes = 'Signed up online'; t.created_at = nowIso(); t.updated_at = t.created_at; t.is_deleted = '0';
       writeTenant_(t);
-      PropertiesService.getScriptProperties().setProperty('PW:' + code, pass); // used once at approval, then deleted
-      PropertiesService.getScriptProperties().setProperty('BT:' + code, bizType_(d.business_type));
+      if (!AUTO_TRIAL) {
+        PropertiesService.getScriptProperties().setProperty('PW:' + code, pass); // used once at approval, then deleted
+        PropertiesService.getScriptProperties().setProperty('BT:' + code, bizType_(d.business_type));
+      }
     } finally { lock.releaseLock(); }
     c.put('SU:count', String(n + 1), 3600);
+    var owner = Session.getEffectiveUser().getEmail();
+
+    if (AUTO_TRIAL) {   // instant free trial: build their database now, active for TRIAL_DAYS days
+      try { provisionTenant_(t, user, pass, !!d.demo, '', bizType_(d.business_type)); }
+      catch (e) { t.is_deleted = '1'; t.notes = 'Sign-up failed: ' + e.message; writeTenant_(t); return { success:false, message:'Could not create your account right now. Please try again in a minute.' }; }
+      t.status = 'active'; t.plan = 'Trial'; t.expiry_date = addMonthsDays_(mToday_(), TRIAL_DAYS - 1); t.updated_at = nowIso(); t.notes = 'Self sign-up · free trial';
+      writeTenant_(t);
+      mlog_('Trial Started', code, d.company_name + ' · ' + d.owner_name + ' · ' + d.phone + ' · until ' + t.expiry_date);
+      try { MailApp.sendEmail(owner, APP_NAME + ' — New free trial: ' + d.company_name, 'A new business started a ' + TRIAL_DAYS + '-day free trial.\n\nCompany: ' + d.company_name + '\nCompany ID: ' + code +
+        '\nOwner: ' + d.owner_name + '\nPhone: ' + d.phone + '\nEmail: ' + (d.email || '-') + '\nCity: ' + (d.city || '-') + '\nTrial ends: ' + t.expiry_date + '\n\nSee it in your Master Console.'); } catch (e) {}
+      return { success:true, trial:true, companyId:code, message:'Your ' + TRIAL_DAYS + '-day free trial is ready!' };
+    }
     mlog_('Sign-up Request', code, d.company_name + ' · ' + d.owner_name + ' · ' + d.phone);
     try {
-      MailApp.sendEmail(Session.getEffectiveUser().getEmail(), APP_NAME + ' — New sign-up: ' + d.company_name,
+      MailApp.sendEmail(owner, APP_NAME + ' — New sign-up: ' + d.company_name,
         'New company is waiting for approval.\n\nCompany: ' + d.company_name + '\nCompany ID: ' + code + '\nOwner: ' + d.owner_name +
         '\nPhone: ' + d.phone + '\nEmail: ' + (d.email || '-') + '\nCity: ' + (d.city || '-') + '\n\nOpen your Master Console to approve or reject.');
     } catch (e) {}
-    return { success:true, message:'Thank you! Your request has been sent to Armedias. You will be able to log in as soon as your account is approved.' };
+    return { success:true, message:'Thank you! Your request has been sent to AR Medias. You will be able to log in as soon as your account is approved.' };
   } catch (e) { return { success:false, message:'Error: ' + e }; }
 }
 

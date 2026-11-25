@@ -198,7 +198,8 @@ function authenticateUser(companyId, username, password) {
   try {
     username = String(username || '').trim(); password = String(password || '');
     var t = tenantByCode_(companyId, true);
-    var bad = tenantBlock_(t); if (bad) return { success:false, message:bad };
+    var bad = tenantBlock_(t);
+    if (bad) return { success:false, message:bad, expired: !!(t && t.status !== 'suspended' && t.status !== 'pending' && daysLeft_(t.expiry_date) !== null && daysLeft_(t.expiry_date) < 0) };
     if (!username || !password) return { success:false, message:'Username and password are required' };
     enterTenant_(t, null);
     var sheet = db_().getSheetByName(USERS_SHEET);
@@ -217,7 +218,7 @@ function authenticateUser(companyId, username, password) {
       touchTenantLogin_(t.tenant_id, username);
       return {
         success: true, token: token,
-        companyId: t.tenant_id, companyName: t.company_name, daysLeft: daysLeft_(t.expiry_date), businessType: bizType_(settingsMap_().business_type), phoneCode: String(settingsMap_().phone_country_code || '91').replace(/\D/g, '') || '91',
+        companyId: t.tenant_id, companyName: t.company_name, daysLeft: daysLeft_(t.expiry_date), plan: t.plan || '', businessType: bizType_(settingsMap_().business_type), phoneCode: String(settingsMap_().phone_country_code || '91').replace(/\D/g, '') || '91',
         username: username, email: data[i][1], role: data[i][3],
         profileImage: data[i][5] || '', themeMode: data[i][6] || 'light', customColors: data[i][7] || '',
         permissions: rbacPermsFor_(data[i][3]), canEditRbac: canEditRbac_(data[i][3])

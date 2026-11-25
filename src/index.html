@@ -1860,11 +1860,13 @@
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState('');
       const [info, setInfo] = useState('');
-      const set = (k) => (e) => setF(p => ({ ...p, [k]: e.target.value }));
+      const [ended, setEnded] = useState(false);   // trial / plan ended → show "choose a plan"
+      const set = (k) => (e) => setF(p => ({ ...p, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }));
       const go = (m) => { setMode(m); setError(''); setInfo(''); };
       const call = (fn, args, ok) => {
         setLoading(true); setError(''); setInfo('');
-        gsPublic(fn, ...args).then(r => { setLoading(false); (r && r.success) ? ok(r) : setError((r && r.message) || 'Failed'); })
+        setEnded(false);
+        gsPublic(fn, ...args).then(r => { setLoading(false); if (r && r.success) ok(r); else { setError((r && r.message) || 'Failed'); if (r && r.expired) setEnded(true); } })
           .catch(() => { setLoading(false); setError('Connection error. Try again.'); });
       };
       const co = () => String(f.company || '').trim().toUpperCase();
@@ -1874,8 +1876,18 @@
         e.preventDefault();
         if (f.su_pass !== f.su_pass2) { setError('Passwords do not match'); return; }
         call('signupCompany', [{ company_name:f.su_company, tenant_id:String(f.su_code || '').trim().toUpperCase(), owner_name:f.su_owner, phone:f.su_phone,
-          email:f.su_email, city:f.su_city, admin_username:f.su_user, admin_password:f.su_pass, business_type:f.su_type || 'general' }],
-          r => { const code = String(f.su_code || '').trim().toUpperCase(); setMode('login'); setF({ company:code, username:f.su_user }); setInfo(r.message); });
+          email:f.su_email, city:f.su_city, admin_username:f.su_user, admin_password:f.su_pass, business_type:f.su_type || 'general', demo: f.su_demo !== false }],
+          r => {
+            const code = String(f.su_code || '').trim().toUpperCase();
+            try { localStorage.setItem('armedias_company', code); } catch (x) {}
+            if (r.trial) {   // instant trial → log straight in
+              setInfo(r.message + ' Signing you in…'); setLoading(true);
+              gsPublic('authenticateUser', code, f.su_user, f.su_pass).then(x => { setLoading(false); if (x && x.success) onLogin(x); else { setMode('login'); setF({ company:code, username:f.su_user }); setInfo(r.message + ' Please sign in.'); } })
+                .catch(() => { setLoading(false); setMode('login'); setF({ company:code, username:f.su_user }); setInfo(r.message + ' Please sign in.'); });
+              return;
+            }
+            setMode('login'); setF({ company:code, username:f.su_user }); setInfo(r.message);
+          });
       };
       // suggest a Company ID from the company name
       const suggestCode = (name) => String(name || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/^[0-9]+/, '').slice(0, 12);
@@ -1909,7 +1921,7 @@
 
             {mode === 'signup' && (
               <form onSubmit={doSignup}>
-                <p className="login-hint">Register your company. Armedias will review and approve your account — you can log in as soon as it is approved.</p>
+                <p className="login-hint"><b>Start your free trial</b> — no card, no approval. Explore every feature; choose a plan when your trial ends.</p>
                 <div className="form-group"><label>Business Name *</label><input type="text" value={f.su_company || ''} required
                   onChange={(e) => { const v = e.target.value; setF(p => ({ ...p, su_company:v, su_code: p.su_codeTouched ? p.su_code : suggestCode(v) })); }} /></div>
                 <div className="form-group"><label>Company ID * <span style={{ fontWeight:400, color:'#888' }}>(you will type this to log in)</span></label>
@@ -1924,6 +1936,8 @@
                 <div className="form-group"><label>Choose a Username *</label><input type="text" value={f.su_user || ''} onChange={set('su_user')} required autoComplete="username" /></div>
                 <div className="form-group"><label>Choose a Password * <span style={{ fontWeight:400, color:'#888' }}>(min 6)</span></label><input type="password" value={f.su_pass || ''} onChange={set('su_pass')} required minLength={6} autoComplete="new-password" /></div>
                 <div className="form-group"><label>Confirm Password *</label><input type="password" value={f.su_pass2 || ''} onChange={set('su_pass2')} required autoComplete="new-password" /></div>
+                <label style={{ display:'flex', alignItems:'center', gap:8, fontSize:14, margin:'-6px 0 14px', textAlign:'left' }}><input type="checkbox" checked={f.su_demo !== false} onChange={set('su_demo')} style={{ width:18, height:18 }} /> Add sample data so I can explore right away</label>
+                {loading && <p className="login-hint" style={{ textAlign:'center' }}><i className="fas fa-spinner fa-spin"></i> Creating your account — this can take up to a minute…</p>}
                 <button type="submit" className="btn btn-primary" disabled={loading} style={{ width:'100%' }}>{spin('fa-paper-plane', 'Submit Registration')}</button>
                 <div className="login-links"><button type="button" className="link-btn" onClick={() => go('login')}><i className="fas fa-arrow-left"></i> Already registered? Login</button></div>
               </form>
@@ -1954,6 +1968,16 @@
             )}
 
             {error && <div className="error">{error}</div>}
+            {ended && (
+              <div style={{ marginTop:14, padding:14, borderRadius:12, background:'#fff7e6', border:'1px solid #f3d08b', textAlign:'left' }}>
+                <div style={{ fontWeight:700, marginBottom:6 }}><i className="fas fa-lock"></i> Choose a plan to continue</div>
+                <div style={{ fontSize:13, color:'#666', marginBottom:10 }}>Small Business from ₹299/month or Enterprise from ₹1,200/month. Your data is kept safe.</div>
+                <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+                  <button type="button" className="btn btn-primary btn-sm" onClick={() => window.open('https://crm.armedias.com/pricing', '_blank')}><i className="fas fa-tags"></i> See plans</button>
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => window.open('https://armedias.com/#contact', '_blank')}><i className="fas fa-headset"></i> Contact AR Medias</button>
+                </div>
+              </div>
+            )}
             {info && <div className="login-info"><i className="fas fa-circle-check"></i> {info}</div>}
             <div className="login-foot">© {new Date().getFullYear()} Armedias · All rights reserved</div>
           </div>
@@ -1981,7 +2005,7 @@
             </button>
 
             <div className="sidebar-header">
-              <div className="sidebar-brand"><img src={BRAND_LOGO} alt="" /><span>AR Medias <b>CRM</b></span></div>
+              <a className="sidebar-brand" href="https://armedias.com" target="_blank" rel="noopener" title="Visit AR Medias"><img src={BRAND_LOGO} alt="" /><span>AR Medias <b>CRM</b></span></a>
               <div className="sidebar-title">
                 <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:170 }}>{companyName || APP_NAME}</span>
               </div>
@@ -2034,7 +2058,7 @@
                 <span>Logout</span>
               </button>
             </div>
-            <div className="powered-by"><img src={BRAND_LOGO} alt="" style={{ width:22, height:22, borderRadius:5, background:'#fff', verticalAlign:'middle', marginRight:6 }} />Powered by <b>{APP_NAME}</b></div>
+            <div className="powered-by"><img src={BRAND_LOGO} alt="" style={{ width:22, height:22, borderRadius:5, background:'#fff', verticalAlign:'middle', marginRight:6 }} />Powered by <a href="https://armedias.com" target="_blank" rel="noopener" style={{ color:'inherit' }}><b>{APP_NAME}</b></a></div>
           </div>
         </>
       );
@@ -4818,7 +4842,7 @@
     }
 
     // ============== Dashboard Layout ==============
-    function Dashboard({ user, email, role, companyName, daysLeft, profileImage, themeMode, permissions, canEditRbac, onThemeToggle, onSettingsUpdate, onLogout }) {
+    function Dashboard({ user, email, role, companyName, daysLeft, plan, profileImage, themeMode, permissions, canEditRbac, onThemeToggle, onSettingsUpdate, onLogout }) {
       const firstPage = can(permissions, 'dashboard', 'v') ? 'dashboard' : (can(permissions, 'settings', 'v') ? 'settings' : 'account');
       const [activeMenu, setActiveMenu] = useState(firstPage);
       const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem('sidebarCollapsed') === '1'; } catch (e) { return false; } });
@@ -4848,14 +4872,18 @@
               themeMode={themeMode} onThemeToggle={onThemeToggle} onLogout={onLogout} collapsed={collapsed} setCollapsed={setCollapsed}
               showMobile={showMobileSidebar} setShowMobile={setShowMobileSidebar} perms={permissions} canEditRbac={canEditRbac} pending={pending} />
             <div className="main-content">
-              {daysLeft != null && daysLeft <= 7 && (
-                <div className="expiry-banner"><i className="fas fa-triangle-exclamation"></i>
-                  {daysLeft <= 0 ? 'Your subscription expires today.' : `Your subscription expires in ${daysLeft} day${daysLeft === 1 ? '' : 's'}.`} Please contact Armedias to renew.</div>
+              {daysLeft != null && (plan === 'Trial' || daysLeft <= 7) && (
+                <div className="expiry-banner"><i className={`fas ${plan === 'Trial' ? 'fa-gift' : 'fa-triangle-exclamation'}`}></i>
+                  <span style={{ flex:1 }}>{plan === 'Trial'
+                    ? (daysLeft <= 0 ? 'Your free trial ends today.' : `Free trial — ${daysLeft + 1} day${daysLeft === 0 ? '' : 's'} left.`) + ' Choose a plan to keep using everything.'
+                    : (daysLeft <= 0 ? 'Your plan ends today.' : `Your plan ends in ${daysLeft} day${daysLeft === 1 ? '' : 's'}.`) + ' Renew to keep access.'}</span>
+                  <button className="btn btn-primary btn-sm" onClick={() => window.open('https://crm.armedias.com/pricing', '_blank')}><i className="fas fa-tags"></i> See plans</button>
+                </div>
               )}
               <div className="header">
                 <h1><i className={`fas ${pageMeta.icon}`}></i> {pageMeta.label}</h1>
                 <div className="header-actions">
-                  <span className="hdr-brand" title="CRM by AR Medias"><img src={BRAND_LOGO} alt="" /> CRM by <b>AR Medias</b></span>
+                  <span className="hdr-brand" title="CRM by AR Medias — armedias.com" style={{ cursor:'pointer' }} onClick={() => window.open('https://armedias.com', '_blank')}><img src={BRAND_LOGO} alt="" /> CRM by <b>AR Medias</b></span>
                   <div className="header-welcome">Welcome, {user}</div>
                   {pageActions && (pageActions.tools || []).map(t => (
                     <button key={t.label} className="btn btn-primary btn-sm" onClick={t.onClick}><i className={`fas ${t.icon}`}></i> {t.label}</button>
@@ -4942,7 +4970,7 @@
 
       const handleLogin = (r) => {
         const s = {
-          token: r.token, companyId: r.companyId, companyName: r.companyName, daysLeft: r.daysLeft, businessType: r.businessType || 'isp', phoneCode: r.phoneCode || '91',
+          token: r.token, companyId: r.companyId, companyName: r.companyName, daysLeft: r.daysLeft, businessType: r.businessType || 'isp', phoneCode: r.phoneCode || '91', plan: r.plan || '',
           username: r.username, role: r.role, email: r.email,
           profileImage: r.profileImage || '', themeMode: r.themeMode || 'light', customColors: r.customColors || '',
           permissions: r.permissions || null, canEditRbac: !!r.canEditRbac, loginTime: Date.now()
@@ -4985,7 +5013,7 @@
       return (
         <div>
           {!sess ? <LoginPage onLogin={handleLogin} /> : (
-            <Dashboard user={sess.username} email={sess.email} role={sess.role} companyName={sess.companyName} daysLeft={sess.daysLeft}
+            <Dashboard user={sess.username} email={sess.email} role={sess.role} companyName={sess.companyName} daysLeft={sess.daysLeft} plan={sess.plan}
               profileImage={sess.profileImage} themeMode={sess.themeMode} permissions={sess.permissions} canEditRbac={sess.canEditRbac}
               onThemeToggle={handleThemeToggle} onSettingsUpdate={handleSettingsUpdate} onLogout={handleLogout} />
           )}

@@ -171,6 +171,14 @@
       );
     }
 
+    // plan picker — choosing a plan fills its limits (Small Business: 3 staff / 1,000 customers; others unlimited)
+    const PLAN_OPTS = ['Trial', 'Small Business', 'Enterprise', 'Custom'];
+    const PLAN_LIM = { 'Trial':[0,0], 'Small Business':[3,1000], 'Enterprise':[0,0] };
+    const planSelect = (f, setF) => (
+      <select value={PLAN_OPTS.indexOf(f.plan) !== -1 ? f.plan : 'Custom'} onChange={(e) => { const p = e.target.value, l = PLAN_LIM[p];
+          setF({ ...f, plan:p, ...(l ? { max_users:String(l[0]), max_customers:String(l[1]) } : {}) }); }}>
+        {PLAN_OPTS.map(p => <option key={p} value={p}>{p}</option>)}</select>);
+
     // where the client's data lives: your Drive (default) or the client's own empty Google Sheet
     function StorageChoice({ f, setF, appEmail }) {
       const own = f.storage === 'own';
@@ -192,8 +200,8 @@
     // ============== Create / edit client ==============
     function TenantForm({ tenant, appEmail, onClose, onSaved }) {
       const isNew = !tenant;
-      const [f, setF] = useState(tenant ? { ...tenant } : { tenant_id:'', company_name:'', owner_name:'', phone:'', email:'', city:'', address:'', plan:'Standard',
-        monthly_fee:'', max_customers:'0', max_users:'0', start_date:today(), months:'1', expiry_date:'', notes:'', admin_username:'admin', admin_password:genPass(), demo:false, timezone:'Asia/Karachi', business_type:'general' });
+      const [f, setF] = useState(tenant ? { ...tenant } : { tenant_id:'', company_name:'', owner_name:'', phone:'', email:'', city:'', address:'', plan:'Small Business',
+        monthly_fee:'', max_customers:'1000', max_users:'3', start_date:today(), months:'1', expiry_date:'', notes:'', admin_username:'admin', admin_password:genPass(), demo:false, timezone:'Asia/Karachi', business_type:'general' });
       const [busy, setBusy] = useState(false);
       const set = (k) => (e) => setF({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value });
       const save = (e) => {
@@ -219,7 +227,7 @@
               {inp('city', 'City')}
               {inp('address', 'Address', { full:true })}
               <div className="sec">Subscription</div>
-              {inp('plan', 'Plan name')}
+              <div className="fg"><label>Plan</label>{planSelect(f, setF)}</div>
               {inp('monthly_fee', 'Monthly fee (Rs)', { type:'number' })}
               {inp('max_customers', 'Max customers (0 = unlimited)', { type:'number' })}
               {inp('max_users', 'Max staff logins (0 = unlimited)', { type:'number' })}
@@ -260,7 +268,7 @@
 
     // ============== Approve a sign-up ==============
     function ApproveModal({ t, appUrl, appEmail, onClose, onDone }) {
-      const [f, setF] = useState({ plan:'Standard', monthly_fee:'', months:'1', max_customers:'0', max_users:'0', demo:false, business_type:t.business_type || 'general' });
+      const [f, setF] = useState({ plan:'Small Business', monthly_fee:'', months:'6', max_customers:'1000', max_users:'3', demo:false, business_type:t.business_type || 'general' });
       const [busy, setBusy] = useState(false);
       const set = (k) => (e) => setF({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value });
       const go = (e) => { e.preventDefault();
@@ -277,7 +285,7 @@
           <form onSubmit={go}>
             <div className="grid2">
               <div className="fg"><label>Type of business</label>{bizSelect(f.business_type, set('business_type'))}</div>
-              <div className="fg"><label>Plan name</label><input value={f.plan} onChange={set('plan')} /></div>
+              <div className="fg"><label>Plan</label>{planSelect(f, setF)}</div>
               <div className="fg"><label>Monthly fee (Rs)</label><input type="number" value={f.monthly_fee} onChange={set('monthly_fee')} /></div>
               <div className="fg"><label>Subscription length</label><select value={f.months} onChange={set('months')}>{[1,3,6,12,24].map(m => <option key={m} value={m}>{m} month{m > 1 ? 's' : ''}</option>)}</select></div>
               <div className="fg"><label>Max customers (0 = unlimited)</label><input type="number" value={f.max_customers} onChange={set('max_customers')} /></div>
@@ -372,7 +380,7 @@
       const [approve, setApprove] = useState(null);
       const [busy, setBusy] = useState(false);
       const k = data.kpis;
-      const rows = data.tenants.filter(t => (!st || t.state === st || (st === 'expiring' && t.state === 'active' && t.days_left !== null && t.days_left <= 7))
+      const rows = data.tenants.filter(t => (!st || t.state === st || (st === 'trial' && t.state === 'active' && t.plan === 'Trial') || (st === 'expiring' && t.state === 'active' && t.days_left !== null && t.days_left <= 7))
         && (!q || (t.tenant_id + ' ' + t.company_name + ' ' + t.owner_name + ' ' + t.phone + ' ' + t.city).toLowerCase().includes(q.toLowerCase())));
       const setStatus = (t, s) => Swal.fire({ icon:'question', title:(s === 'active' ? 'Activate ' : 'Suspend ') + t.company_name + '?', text: s === 'suspended' ? 'All their staff will be logged out and blocked until you activate them again.' : '', showCancelButton:true, confirmButtonText:'Yes' })
         .then(res => { if (res.isConfirmed) call('setStatus', t.tenant_id, s).then(r => { toast(r); reload(); }); });
@@ -388,6 +396,7 @@
           <div className="kpis">
             {card(k.total, 'Total clients', '')}
             {card(k.pending, 'Pending sign-ups', 'pending')}
+            {card(k.trial || 0, 'On free trial', 'trial')}
             {card(k.active, 'Active', 'active')}
             {card(k.expiring, 'Expiring ≤ 7 days', 'expiring')}
             {card(k.expired, 'Expired', 'expired')}

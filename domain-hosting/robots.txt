@@ -2,3 +2,6 @@ User-agent: *
 Allow: /
 Disallow: /app
 Disallow: /admin
+Disallow: /b
+
+Sitemap: https://crm.armedias.com/sitemap.xml

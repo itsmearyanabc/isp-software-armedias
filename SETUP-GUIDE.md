@@ -221,3 +221,9 @@ clasp push --force
 clasp deploy -i AKfycbyaMbrRbhLf7HZ_nQfo0UGQWSo7_oNPnX1hcIwnEY6YmC2hnfEdHvI_K-TnbJJDNZWTWQ --description "update"
 git add -A && git commit -m "update" && git push
 ```
+
+## Website pages (crm.armedias.com)
+The public site is generated: edit text, prices and features in `tools/build_site.py`, then run
+`python3 tools/build_site.py` and push to GitHub (Cloudflare publishes automatically).
+New pages must also be added to the allow-list in `_worker.js`.
+Trial length / auto-trial and plan limits live at the top of `Master.gs` (`AUTO_TRIAL`, `TRIAL_DAYS`, `PLAN_LIMITS`).
