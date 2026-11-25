@@ -149,7 +149,7 @@ var API_CALLER = {
   getCustomer360:0, getUserActivity:0, resetUserPassword:0, getSettings:0, saveSettings:0,
   childRead:0, childInsert:0, childDelete:0,
   listApiKeys:0, createApiKey:0, revokeApiKey:0,
-  getWhatsAppConfig:0, saveWhatsAppConfig:0, testWhatsApp:0, sendInvoiceWhatsApp:0, sendInvoiceEmail:0
+  getWhatsAppConfig:0, saveWhatsAppConfig:0, testWhatsApp:0, sendInvoiceWhatsApp:0, sendInvoiceEmail:0, sendReceiptWhatsApp:0, receiptLink:0
 };
 
 function api(token, fn, args) {
@@ -1436,7 +1436,7 @@ function waFetch_(c, path, opts) {
 function getWhatsAppConfig(caller) {
   if (!gate_(caller, 'settings', 'e')) return { success:false, message:'Only the owner or an admin can manage WhatsApp' };
   var c = waCfg_();
-  return { success:true, data:{ phone_id:c.phone_id || '', template:c.template || 'invoice_bill', lang:c.lang || 'en', auto:!!c.auto,
+  return { success:true, data:{ phone_id:c.phone_id || '', template:c.template || 'invoice_bill', receipt_template:c.receipt_template || 'payment_receipt', lang:c.lang || 'en', auto:!!c.auto,
     token_saved: !!c.token, token_hint: c.token ? '••••' + String(c.token).slice(-4) : '', number:c.number || '' } };
 }
 function saveWhatsAppConfig(caller, d) {
@@ -1446,6 +1446,7 @@ function saveWhatsAppConfig(caller, d) {
   c.phone_id = String(d.phone_id || '').replace(/\D/g, '');
   if (d.token) c.token = String(d.token).trim();
   c.template = String(d.template || 'invoice_bill').trim().toLowerCase();
+  c.receipt_template = String(d.receipt_template || 'payment_receipt').trim().toLowerCase();
   c.lang = String(d.lang || 'en').trim();
   c.auto = !!d.auto;
   if (!c.phone_id || !c.token) return { success:false, message:'Phone Number ID and Access Token are required' };
@@ -1508,6 +1509,76 @@ function sendInvoiceEmail(caller, invoiceId) {
     addLog(caller, 'Email Bill Failed', inv.invoice_number + ': ' + e.message);
     return { success:false, message:'Email: ' + e.message };
   }
+}
+
+// ============== Payment receipts (PDF) ==============
+function receiptData_(paymentId) {
+  var pay = readObjs_('Payments').filter(function(x){ return String(x.id) === String(paymentId); })[0];
+  if (!pay) return null;
+  var cust = custById_(pay.customer_id) || {};
+  var inv = pay.invoice_id ? readObjs_('Invoices').filter(function(x){ return String(x.id) === String(pay.invoice_id); })[0] : null;
+  return { pay:pay, cust:cust, inv:inv || null, co:settingsMap_() };
+}
+function receiptPdf_(r) {
+  var e = function(v){ return String(v == null ? '' : v).replace(/[&<>"]/g, function(c){ return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]; }); };
+  var cur = r.co.currency || 'INR', m = function(v){ return e(cur) + ' ' + round2(num(v)).toLocaleString('en-IN'); };
+  var row = function(l, v){ return '<tr><td style="padding:10px;border-bottom:1px solid #eee;color:#555">' + l + '</td><td style="padding:10px;border-bottom:1px solid #eee;text-align:right;font-weight:600">' + v + '</td></tr>'; };
+  var bal = round2(num(r.cust.current_balance));
+  var html = '<html><body style="font-family:Arial,sans-serif;color:#222;padding:24px">' +
+    '<table style="width:100%;border-bottom:3px solid #2B2F36;margin-bottom:16px"><tr><td><div style="font-size:22px;font-weight:700;color:#2B2F36">' + e(r.co.company_name) + '</div><div style="color:#666;font-size:12px">' + e(r.co.support_phone || '') + '</div></td>' +
+    '<td style="text-align:right"><div style="font-size:18px;font-weight:700;color:#1e7e34">PAYMENT RECEIPT</div><div style="font-size:12px">' + e(r.pay.receipt_number) + '</div></td></tr></table>' +
+    '<table style="width:100%;font-size:13px;margin-bottom:14px"><tr><td><b>Received from:</b> ' + e(r.cust.full_name || '') + '<br>' + e(r.cust.phone || '') + '</td>' +
+    '<td style="text-align:right"><b>Date:</b> ' + e(ymd_(r.pay.payment_date)) + '</td></tr></table>' +
+    '<div style="background:#e8f5ec;border:1px solid #b6e6c5;border-radius:10px;padding:14px;text-align:center;margin-bottom:14px"><div style="font-size:12px;color:#1e7e34;text-transform:uppercase;letter-spacing:1px">Amount received</div><div style="font-size:28px;font-weight:800;color:#1e7e34">' + m(r.pay.amount) + '</div></div>' +
+    '<table style="width:100%;border-collapse:collapse;font-size:14px">' +
+    row('Receipt #', e(r.pay.receipt_number)) + row('Payment method', e(String(r.pay.payment_method || '').replace(/_/g, ' '))) +
+    (r.pay.reference_number ? row('Reference / TRX ID', e(r.pay.reference_number)) : '') +
+    (r.inv ? row('Against bill', e(r.inv.invoice_number) + ' (' + m(r.inv.total) + ')') : '') +
+    (r.pay.collected_by ? row('Received by', e(r.pay.collected_by)) : '') +
+    row('Balance remaining', bal > 0.009 ? m(bal) : 'Nil — account clear') + '</table>' +
+    '<p style="margin-top:28px;color:#888;font-size:11px;text-align:center">Thank you for your payment — ' + e(r.co.company_name) + '<br>This is a computer-generated receipt.</p></body></html>';
+  return HtmlService.createHtmlOutput(html).getBlob().getAs('application/pdf').setName((r.pay.receipt_number || 'receipt') + '.pdf');
+}
+
+// official WhatsApp API: the PDF goes straight into the customer's chat (template with a Document header)
+function sendReceiptWhatsApp(caller, paymentId) {
+  if (!gate_(caller, 'payments', 'v')) return { success:false, message:'Access denied' };
+  var c = waCfg_(); if (!c.phone_id || !c.token) return { success:false, message:'WhatsApp API is not connected' };
+  var r = receiptData_(paymentId); if (!r) return { success:false, message:'Payment not found' };
+  var to = waNumber_(r.cust.phone); if (!to) return { success:false, message:'This customer has no valid phone number' };
+  try {
+    var pdf = receiptPdf_(r);
+    var media = waFetch_(c, c.phone_id + '/media', { method:'post', payload:{ messaging_product:'whatsapp', type:'application/pdf', file:pdf } });
+    var clean = function(v){ return String(v == null ? '' : v).replace(/[\r\n\t]+/g, ' ').slice(0, 200) || '-'; };
+    var msg = { messaging_product:'whatsapp', to:to, type:'template', template:{ name:c.receipt_template || 'payment_receipt', language:{ code:c.lang || 'en' }, components:[
+      { type:'header', parameters:[{ type:'document', document:{ id:media.id, filename:pdf.getName() } }] },
+      { type:'body', parameters:[ { type:'text', text:clean(r.cust.full_name || 'Customer') }, { type:'text', text:clean(r.pay.receipt_number) },
+                                   { type:'text', text:clean((r.co.currency || 'INR') + ' ' + round2(num(r.pay.amount)).toLocaleString('en-IN')) } ] } ] } };
+    waFetch_(c, c.phone_id + '/messages', { method:'post', contentType:'application/json', payload:JSON.stringify(msg) });
+    addLog(caller, 'WhatsApp Receipt Sent', r.pay.receipt_number + ' → ' + to);
+    return { success:true, message:'Receipt ' + r.pay.receipt_number + ' sent on WhatsApp to +' + to };
+  } catch (e) {
+    addLog(caller, 'WhatsApp Receipt Failed', r.pay.receipt_number + ': ' + e.message);
+    return { success:false, message:'WhatsApp: ' + e.message };
+  }
+}
+
+// no API: create (once) a private, unguessable download link to the PDF receipt for a normal WhatsApp message
+function receiptLink(caller, paymentId) {
+  if (!gate_(caller, 'payments', 'v')) return { success:false, message:'Access denied' };
+  var r = receiptData_(paymentId); if (!r) return { success:false, message:'Payment not found' };
+  var props = PropertiesService.getScriptProperties(), key = 'RL:' + CTX.tid + ':' + r.pay.id, fid = props.getProperty(key), file = null;
+  if (fid) { try { file = DriveApp.getFileById(fid); if (file.isTrashed()) file = null; } catch (e) { file = null; } }
+  if (!file) {
+    var folders = DriveApp.getFoldersByName('AR Medias CRM — Shared receipts');
+    var folder = folders.hasNext() ? folders.next() : DriveApp.createFolder('AR Medias CRM — Shared receipts');
+    file = folder.createFile(receiptPdf_(r)).setName(CTX.tid + '_' + (r.pay.receipt_number || r.pay.id) + '.pdf');
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    props.setProperty(key, file.getId());
+    addLog(caller, 'Receipt Link Created', r.pay.receipt_number);
+  }
+  return { success:true, url:'https://drive.google.com/file/d/' + file.getId() + '/view', balance:round2(num(r.cust.current_balance)),
+           invoice_number: r.inv ? r.inv.invoice_number : '' };
 }
 
 function sendInvoiceWhatsApp(caller, invoiceId) {
