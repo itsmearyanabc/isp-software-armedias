@@ -1,20 +1,23 @@
 /**
- * Armedias ISP Software — client app backend (Code.gs)
+ * Armedias CRM — client app backend (Code.gs)
  * © Armedias. All rights reserved.
  *
- * Multi-company: every client ISP has its OWN Google Sheet (created from the Master Console).
+ * Multi-company: every client business has its OWN Google Sheet (created from the Master Console).
  * Each request runs inside a company context (CTX) that api() sets after checking the login token,
  * so one company can never read or write another company's data.
  * Client management (create clients, credentials, status, stats) lives in Master.gs.
  */
 
 // ============== Configuration ==============
-var APP_NAME = 'Armedias ISP Software';
+var APP_NAME = 'Armedias CRM';
 var USERS_SHEET = 'Users';
 var LOGS_SHEET = 'Logs';
 var ROLES_SHEET = 'Roles';
-var ASSETS_FOLDER_NAME = 'Armedias ISP — Assets';
+var ASSETS_FOLDER_NAME = 'Armedias ISP — Assets';   // keep: existing profile pictures live here
 var SESSION_TTL = 21600; // 6h sliding (seconds)
+// what kind of business a company runs — changes menu names, fields and demo data (default 'isp' for older companies)
+var BUSINESS_TYPES = ['isp', 'retail', 'services', 'general'];
+function bizType_(v) { return BUSINESS_TYPES.indexOf(String(v || '')) !== -1 ? String(v) : 'isp'; }
 
 // per-request company context: { tid, tenant, ss, user, tz }
 var CTX = null;
@@ -192,7 +195,7 @@ function authenticateUser(companyId, username, password) {
       touchTenantLogin_(t.tenant_id, username);
       return {
         success: true, token: token,
-        companyId: t.tenant_id, companyName: t.company_name, daysLeft: daysLeft_(t.expiry_date),
+        companyId: t.tenant_id, companyName: t.company_name, daysLeft: daysLeft_(t.expiry_date), businessType: bizType_(settingsMap_().business_type),
         username: username, email: data[i][1], role: data[i][3],
         profileImage: data[i][5] || '', themeMode: data[i][6] || 'light', customColors: data[i][7] || '',
         permissions: rbacPermsFor_(data[i][3]), canEditRbac: canEditRbac_(data[i][3])
@@ -396,6 +399,7 @@ function getDashboardStats(callerUser) {
       totalCustomers: custs.length,
       activeConnections: custs.filter(function(c){ return c.connection_status === 'active'; }).length,
       suspended: custs.filter(function(c){ return c.connection_status === 'suspended'; }).length,
+      inactive: custs.filter(function(c){ return c.connection_status !== 'active'; }).length,
       invoicedThisMonth: round2(invoicedThisMonth), collectedThisMonth: round2(collectedThisMonth),
       outstanding: round2(outstanding), previousArrears: round2(arrears), defaulters: withDues.length,
       openComplaints: comps.filter(function(c){ return c.status === 'open' || c.status === 'in_progress'; }).length,
@@ -853,7 +857,7 @@ function customerLookup_(){
 }
 function packageLookup_(){
   return readObjs_('Packages').map(function(p){
-    return { id:p.id, label:(p.name || '') + ' · ' + num(p.speed_mbps) + ' Mbps · Rs ' + num(p.price),
+    return { id:p.id, label:(p.name || '') + (num(p.speed_mbps) > 0 ? ' · ' + num(p.speed_mbps) + ' Mbps' : '') + ' · Rs ' + num(p.price),
              name:p.name || '', speed:num(p.speed_mbps), price:round2(num(p.price)), cycle:p.billing_cycle || 'monthly' };
   });
 }
@@ -928,7 +932,7 @@ function generateMonthlyInvoices(caller, month){
   month = /^\d{4}-\d{2}$/.test(String(month || '')) ? month : monthStr_();
   var lock = LockService.getScriptLock();
   try { lock.waitLock(30000); } catch (e) { return { success:false, message:'System is busy, please try again' }; }
-  var count = 0, skipped = 0;
+  var count = 0, skipped = 0, noPrice = 0;
   try {
     var custs = readObjs_('Customers').filter(function(c){ return c.connection_status === 'active'; });
     var pkg = {}; readObjs_('Packages').forEach(function(p){ pkg[String(p.id)] = p; });
@@ -937,6 +941,7 @@ function generateMonthlyInvoices(caller, month){
     custs.forEach(function(c){
       if (has[String(c.id)]) { skipped++; return; }
       var p = pkg[String(c.package_id)], amt = p ? round2(num(p.price)) : 0;
+      if (amt <= 0) { noPrice++; return; }                                  // nothing to bill
       var day = Math.min(28, Math.max(1, Number(c.monthly_due_day) || 10));
       var o = { invoice_number:'INV-' + pad_(id), customer_id:c.id, package_id:c.package_id, billing_month:month,
                 amount:amt, discount:0, tax:0, total:amt, previous_balance:round2(num(c.current_balance)),
@@ -948,7 +953,7 @@ function generateMonthlyInvoices(caller, month){
   } finally { lock.releaseLock(); }
   recalcBalances_();
   addLog(caller, 'Invoices Generated', month + ' · ' + count + ' created, ' + skipped + ' skipped');
-  return { success:true, count:count, skipped:skipped, message:'Generated ' + count + ' invoice(s) for ' + month + (skipped ? ' · ' + skipped + ' already billed' : '') };
+  return { success:true, count:count, skipped:skipped, message:'Generated ' + count + ' invoice(s) for ' + month + (skipped ? ' · ' + skipped + ' already billed' : '') + (noPrice ? ' · ' + noPrice + ' without a priced plan' : '') };
 }
 
 function getRecovery(caller){
@@ -1173,7 +1178,7 @@ function resetUserPassword(caller, username, newPwd){
 // ============== Company settings (key/value) ==============
 function settingsMap_(){
   var sh = db_().getSheetByName('Settings');
-  var out = { company_name:(CTX.tenant && CTX.tenant.company_name) || 'My ISP', currency:'PKR', support_phone:'', whatsapp_number:'', invoice_prefix:'INV', late_fee_pct:'0' };
+  var out = { company_name:(CTX.tenant && CTX.tenant.company_name) || 'My Business', currency:'PKR', support_phone:'', whatsapp_number:'', invoice_prefix:'INV', late_fee_pct:'0' };
   if (!sh) return out;
   var data = sh.getDataRange().getValues();
   for (var i = 1; i < data.length; i++) if (data[i][0]) out[data[i][0]] = data[i][1];
@@ -1189,6 +1194,7 @@ function saveSettings(caller, obj){
   if (!sh) return { success:false, message:'Settings sheet missing' };
   var data = sh.getDataRange().getValues(), idx = {};
   for (var i = 1; i < data.length; i++) idx[data[i][0]] = i + 1;
+  if (obj && obj.business_type !== undefined) obj.business_type = bizType_(obj.business_type);
   Object.keys(obj || {}).forEach(function(k){ if (idx[k]) sh.getRange(idx[k], 2).setValue(obj[k]); else sh.appendRow([k, obj[k]]); });
   addLog(caller, 'Settings Updated', Object.keys(obj || {}).join(', '));
   return { success:true, message:'Settings saved successfully!' };
@@ -1275,6 +1281,25 @@ function buildTenantDb_(ss, opts) {
     function ymd(n){ var d = new Date(); return Utilities.formatDate(new Date(d.getFullYear(), d.getMonth(), d.getDate() - n), tz_(), 'yyyy-MM-dd'); }
 
     var ts = nowIso(), month = monthStr_(), A = opts.admin, co = opts.company || {};
+    var BT = bizType_(opts.business_type), ISP = BT === 'isp';
+    var DEMO = {
+      isp: { areas:['North Zone','South Zone','East Block','West Block','Central'],
+             pk:[['Basic 10Mbps',10,1500,'monthly'],['Standard 25Mbps',25,2500,'monthly'],['Premium 50Mbps',50,4000,'monthly'],['Business 100Mbps',100,8000,'monthly'],['Fiber 200Mbps',200,15000,'monthly']],
+             exp:[['bandwidth','Upstream bandwidth - monthly',120000],['salary','Staff salaries',85000],['rent','Office + tower rent',40000],['utilities','Electricity bill',18000],['maintenance','Fiber splicing repair',9500]],
+             comp:['Slow speed in evening','No internet','Billing query'], vend:['Alpha Networks Supplier','Beta Hardware Trading'] },
+      retail: { areas:['Main Store','Mall Outlet','Online Store'],
+             pk:[['Kurta (ready-made)',0,2500,'one_time'],['Lawn Suit 3-piece',0,4500,'one_time'],['Kids Wear Set',0,1800,'one_time'],['Stitching Service',0,1200,'one_time'],['Loyalty Membership',0,500,'monthly']],
+             exp:[['stock_purchase','Fabric & stock purchase',95000],['salary','Staff salaries',60000],['rent','Shop rent',45000],['utilities','Electricity bill',12000],['marketing','Social media ads',8000]],
+             comp:['Size exchange request','Late delivery','Billing query'], vend:['Textile Wholesale Co','Packaging Supplies'] },
+      services: { areas:['Local','National','International'],
+             pk:[['Social Media Management',0,35000,'monthly'],['Website Design',0,80000,'one_time'],['SEO Retainer',0,25000,'monthly'],['Video Production',0,40000,'one_time'],['Consultation Hour',0,5000,'one_time']],
+             exp:[['salary','Team salaries',150000],['software','Software subscriptions',18000],['rent','Office rent',50000],['marketing','Ads for agency',15000],['utilities','Internet & electricity',9000]],
+             comp:['Revision request','Report not received','Billing query'], vend:['Freelance Designer','Cloud Hosting Provider'] },
+      general: { areas:['Head Office','Branch 1','Branch 2'],
+             pk:[['Standard Product',0,1500,'one_time'],['Premium Product',0,4000,'one_time'],['Monthly Service',0,3000,'monthly'],['Annual Plan',0,30000,'yearly'],['Installation / Setup',0,2000,'one_time']],
+             exp:[['salary','Staff salaries',80000],['rent','Office rent',40000],['utilities','Electricity bill',15000],['supplies','Office supplies',6000],['marketing','Advertising',10000]],
+             comp:['Product issue','Late delivery','Billing query'], vend:['Main Supplier','Logistics Partner'] }
+    }[BT];
 
     var usersSheet = mk(USERS_SHEET, ['Username','Email','Password','Role','Status','ProfileImage','ThemeMode','CustomColors','CreatedAt','CreatedBy','UpdatedAt','UpdatedBy','Name','Phone','AreaId','is_deleted','LastLogin','OTP']);
     usersSheet.getRange('A:A').setNumberFormat('@'); usersSheet.getRange('C:C').setNumberFormat('@'); usersSheet.getRange('N:N').setNumberFormat('@');
@@ -1292,7 +1317,7 @@ function buildTenantDb_(ss, opts) {
     usersSheet.appendRow([A.username, A.email || '', A.password, 'super_admin', 'Active', '', 'light', '', ts, 'Armedias', ts, 'Armedias', A.name || '', A.phone || '', '', 0, '', '']);
 
     var settingsSheet = ss.getSheetByName('Settings');
-    [['company_name', co.name || ''], ['currency','PKR'], ['invoice_prefix','INV'], ['support_phone', co.phone || ''], ['whatsapp_number', co.whatsapp || co.phone || ''], ['late_fee_pct','0']]
+    [['company_name', co.name || ''], ['business_type', BT], ['currency','PKR'], ['invoice_prefix','INV'], ['support_phone', co.phone || ''], ['whatsapp_number', co.whatsapp || co.phone || ''], ['late_fee_pct','0']]
       .forEach(function(kv){ settingsSheet.appendRow(kv); });
     settingsSheet.getRange('B:B').setNumberFormat('@');
 
@@ -1303,32 +1328,22 @@ function buildTenantDb_(ss, opts) {
         usersSheet.appendRow([u[0], '', Utilities.getUuid().slice(0, 10), u[1], 'Inactive', '', 'light', '', ts, 'Armedias', ts, 'Armedias', u[2], '', '', 0, '', '']);
       });
 
-      seedAll('areas', [
-        { name:'North Zone', city:'City One', description:'Northern coverage', status:'active' },
-        { name:'South Zone', city:'City One', description:'Southern coverage', status:'active' },
-        { name:'East Block', city:'City Two', description:'Eastern coverage',  status:'active' },
-        { name:'West Block', city:'City Two', description:'Western coverage',  status:'active' },
-        { name:'Central',    city:'City One', description:'City center',       status:'active' }
-      ], ts);
+      seedAll('areas', DEMO.areas.map(function(n){ return { name:n, city:'', description:'', status:'active' }; }), ts);
 
-      var pkgPrice = [0, 1500, 2500, 4000, 8000, 15000];
-      seedAll('packages', [
-        { name:'Basic 10Mbps',     speed_mbps:10,  price:1500,  billing_cycle:'monthly', description:'Entry home plan',   status:'active' },
-        { name:'Standard 25Mbps',  speed_mbps:25,  price:2500,  billing_cycle:'monthly', description:'Popular home plan', status:'active' },
-        { name:'Premium 50Mbps',   speed_mbps:50,  price:4000,  billing_cycle:'monthly', description:'High-speed home',   status:'active' },
-        { name:'Business 100Mbps', speed_mbps:100, price:8000,  billing_cycle:'monthly', description:'SME plan',          status:'active' },
-        { name:'Fiber 200Mbps',    speed_mbps:200, price:15000, billing_cycle:'monthly', description:'Enterprise fiber',  status:'active' }
-      ], ts);
+      var pkgPrice = [0].concat(DEMO.pk.map(function(p){ return p[2]; }));
+      seedAll('packages', DEMO.pk.map(function(p){ return { name:p[0], speed_mbps:p[1] || '', price:p[2], billing_cycle:p[3], description:'', status:'active' }; }), ts);
 
+      var nA = DEMO.areas.length;
       var custPkg  = [2,1,3,2,4,1,3,5,2,1];
-      var custArea = [1,1,2,2,3,3,4,4,5,5];
-      var custStat = ['active','active','active','active','suspended','active','active','disconnected','active','active'];
+      var custArea = [1,1,2,2,3,3,4,4,5,5].map(function(a){ return ((a - 1) % nA) + 1; });
+      var custStat = ISP ? ['active','active','active','active','suspended','active','active','disconnected','active','active']
+                         : ['active','active','active','active','inactive','active','active','inactive','active','active'];
       var custOpen = [0, 0, 0, 0, 1500, 0, 2500, 6000, 0, 800];
       var custList = [];
       for (var ci = 0; ci < 10; ci++) custList.push({
         full_name:'Customer ' + (ci+1), phone:'0301-100000' + (ci+1), email:'customer' + (ci+1) + '@demo.com',
         cnic:'', address:'House ' + (ci+1) + ', Street ' + ((ci%5)+1), area_id:custArea[ci], package_id:custPkg[ci],
-        installation_date:ymd(30 + ci*5), monthly_due_day:(ci%28)+1, ip_address:'10.0.0.' + (ci+1), mac_address:'',
+        installation_date:ymd(30 + ci*5), monthly_due_day:(ci%28)+1, ip_address:ISP ? '10.0.0.' + (ci+1) : '', mac_address:'',
         connection_status:custStat[ci], opening_balance:custOpen[ci], notes:'', previous_balance:0, current_balance:0
       });
       seedAll('customers', custList, ts);
@@ -1350,17 +1365,11 @@ function buildTenantDb_(ss, opts) {
         { slip_code:'SLP-0006', invoice_id:6, customer_id:6, amount:round2(pkgPrice[custPkg[5]]/2), payment_method:'cash',          payment_date:ymd(2), collected_by:C2, reference_number:'',         notes:'Partial' }
       ], ts);
 
-      seedAll('expenses', [
-        { expense_date:ymd(3), category:'bandwidth',   description:'Upstream bandwidth - monthly', amount:120000, paid_by:A.username, receipt_image:'', notes:'' },
-        { expense_date:ymd(5), category:'salary',      description:'Staff salaries',               amount:85000,  paid_by:A.username, receipt_image:'', notes:'' },
-        { expense_date:ymd(7), category:'rent',        description:'Office + tower rent',          amount:40000,  paid_by:A.username, receipt_image:'', notes:'' },
-        { expense_date:ymd(2), category:'utilities',   description:'Electricity bill',             amount:18000,  paid_by:AC,         receipt_image:'', notes:'' },
-        { expense_date:ymd(1), category:'maintenance', description:'Fiber splicing repair',        amount:9500,   paid_by:C1,         receipt_image:'', notes:'' }
-      ], ts);
+      seedAll('expenses', DEMO.exp.map(function(e, i){ return { expense_date:ymd(i + 1), category:e[0], description:e[1], amount:e[2], paid_by:i < 3 ? A.username : AC, receipt_image:'', notes:'' }; }), ts);
 
       seedAll('vendors', [
-        { vendor_name:'Alpha Networks Supplier', contact_person:'Sales Desk', phone:'042-1000001', email:'alpha@demo.com', address:'Industrial Area', city:'City One', opening_balance:0, current_balance:50000, status:'active', notes:'Bandwidth provider' },
-        { vendor_name:'Beta Hardware Trading',   contact_person:'Order Desk', phone:'042-1000002', email:'beta@demo.com',  address:'Tech Market',     city:'City Two', opening_balance:0, current_balance:0,     status:'active', notes:'Routers / ONUs' }
+        { vendor_name:DEMO.vend[0], contact_person:'Sales Desk', phone:'042-1000001', email:'vendor1@demo.com', address:'', city:'', opening_balance:0, current_balance:50000, status:'active', notes:'' },
+        { vendor_name:DEMO.vend[1], contact_person:'Order Desk', phone:'042-1000002', email:'vendor2@demo.com', address:'', city:'', opening_balance:0, current_balance:0,     status:'active', notes:'' }
       ], ts);
 
       seedAll('banks', [
@@ -1369,9 +1378,9 @@ function buildTenantDb_(ss, opts) {
       ], ts);
 
       seedAll('complaints', [
-        { customer_id:1, subject:'Slow speed in evening', description:'Speed drops after 8pm',         priority:'high',   status:'open',        assigned_to:C1, resolution:'',                   resolved_at:'' },
-        { customer_id:3, subject:'No internet',           description:'Connection down since morning', priority:'urgent', status:'in_progress', assigned_to:C2, resolution:'',                   resolved_at:'' },
-        { customer_id:5, subject:'Billing query',         description:'Asked about partial invoice',   priority:'low',    status:'resolved',    assigned_to:AC, resolution:'Explained pro-rata', resolved_at:ts }
+        { customer_id:1, subject:DEMO.comp[0], description:'Customer request', priority:'high',   status:'open',        assigned_to:C1, resolution:'',                resolved_at:'' },
+        { customer_id:3, subject:DEMO.comp[1], description:'Customer request', priority:'urgent', status:'in_progress', assigned_to:C2, resolution:'',                resolved_at:'' },
+        { customer_id:5, subject:DEMO.comp[2], description:'Asked about partial invoice', priority:'low', status:'resolved', assigned_to:AC, resolution:'Explained', resolved_at:ts }
       ], ts);
 
       seedAll('calls', [
@@ -1384,12 +1393,12 @@ function buildTenantDb_(ss, opts) {
         { full_name:'Lead Two', phone:'0302-2000002', alternate_phone:'', email:'lead2@demo.com', address:'Block B', area_id:2, package_interested_id:3, source:'walk_in', status:'contacted', priority:'medium', owner_user_id:C2, expected_install_date:ymd(-7), quote_amount:4000, next_followup_date:ymd(-1), notes:'' }
       ], ts);
 
-      seedAll('equipment', [
+      if (ISP) seedAll('equipment', [
         { type:'router', brand:'GenericNet', model:'R-100',  serial:'SN-RT-0001', mac:'AA:BB:CC:00:00:01', status:'assigned', assigned_to_customer_id:1,  assigned_at:ts, purchase_cost:3500, purchase_date:ymd(120), vendor_name:'Beta Hardware Trading', location:'Customer Site',  notes:'' },
         { type:'router', brand:'GenericNet', model:'R-100',  serial:'SN-RT-0002', mac:'',                  status:'in_stock', assigned_to_customer_id:'', assigned_at:'', purchase_cost:3500, purchase_date:ymd(90),  vendor_name:'Beta Hardware Trading', location:'Main Warehouse', notes:'' }
       ], ts);
 
-      seedAll('collections', [
+      if (ISP) seedAll('collections', [
         { collector_user_id:C1, collection_date:ymd(0), opening_balance:0, total_collected_cash:pkgPrice[custPkg[0]], total_collected_online:0, total_expenses_paid:0, deposited_to_bank_amount:0, deposit_date:'', deposit_reference:'', status:'open', notes:'' }
       ], ts);
 
@@ -1403,6 +1412,19 @@ function buildTenantDb_(ss, opts) {
   } finally {
     CTX = prev;
   }
+}
+
+function clearBusinessData_(ss) {
+  var sheets = Object.keys(TBL).map(function(k){ return TBL[k].sheet; })
+    .concat(['PaymentAllocations','ExpensePayments','ComplaintAttachments','CustomerDocuments','CollectionVisits']);
+  var cleared = 0;
+  sheets.forEach(function(name){
+    var sh = ss.getSheetByName(name); if (!sh) return;
+    var n = sh.getLastRow() - 1; if (n > 0) { sh.deleteRows(2, n); cleared += n; }
+  });
+  var us = ss.getSheetByName(USERS_SHEET);                 // demo staff → removed (soft)
+  if (us) { var ud = us.getDataRange().getValues(); for (var i = 1; i < ud.length; i++) if (/^demo_/.test(String(ud[i][0]))) us.getRange(i + 1, 16).setValue(1); }
+  return cleared;
 }
 
 // adds any missing columns to a company's sheets (no data loss) and rebuilds balances

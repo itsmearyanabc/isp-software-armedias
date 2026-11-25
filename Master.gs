@@ -1,5 +1,5 @@
 /**
- * Armedias ISP Software — Master Console backend (Master.gs)
+ * Armedias CRM — Master Console backend (Master.gs)
  * © Armedias. All rights reserved.
  *
  * Lives in the spreadsheet this script is bound to:
@@ -10,12 +10,12 @@
 
 var MASTER_TENANTS = 'Tenants';
 var MASTER_LOGS = 'MasterLogs';
-var TENANT_FOLDER_NAME = 'Armedias ISP — Client Databases';
+var TENANT_FOLDER_NAME = 'Armedias ISP — Client Databases';   // keep this name: your existing client sheets live in this Drive folder
 var MASTER_DEFAULT_USER = 'master';
 var MASTER_DEFAULT_PASS = 'Armedias@123';   // used ONLY on first login; you are forced to change it
 // Your own client login address (e.g. 'https://isp.armedias.com'). Leave '' to use the Google script link.
 // Used in the login details you copy/WhatsApp to clients and in approval emails.
-var PUBLIC_LOGIN_URL = 'https://isp.armedias.com';
+var PUBLIC_LOGIN_URL = 'https://crm.armedias.com';
 function loginUrl_() { return PUBLIC_LOGIN_URL || ScriptApp.getService().getUrl(); }
 var T_COLS = ['tenant_id','company_name','owner_name','phone','email','city','address','spreadsheet_id','plan','monthly_fee',
               'max_customers','max_users','start_date','expiry_date','status','notes','admin_username','created_at','updated_at',
@@ -139,7 +139,7 @@ function masterLogout(token) { if (okToken_(token)) CacheService.getScriptCache(
 
 // Master Console calls go through here: mapi(token, 'overview', [])
 var M_API = ['overview','createTenant','approveTenant','rejectTenant','updateTenant','setStatus','extend','tenantDetail','refreshStats','refreshAll',
-             'resetUserPassword','setUserStatus','deleteTenant','logs','changePassword'];
+             'resetUserPassword','setUserStatus','deleteTenant','logs','changePassword','clearData'];
 function mapi(token, fn, args) {
   try {
     if (!okToken_(token) || !CacheService.getScriptCache().get('M:' + token)) return { success:false, authExpired:true, message:'Session expired. Please log in again.' };
@@ -156,6 +156,7 @@ function publicTenant_(t) {
   var state = t.status === 'pending' ? 'pending' : (t.status === 'suspended' ? 'suspended' : (d !== null && d < 0 ? 'expired' : 'active'));
   var o = {}; T_COLS.forEach(function(k){ if (k !== 'stats_json') o[k] = t[k]; });
   o.stats = stats; o.days_left = d; o.state = state;
+  o.business_type = stats.business_type || (state === 'pending' ? bizType_(PropertiesService.getScriptProperties().getProperty('BT:' + t.tenant_id)) : 'isp');
   o.sheet_url = t.spreadsheet_id ? 'https://docs.google.com/spreadsheets/d/' + t.spreadsheet_id + '/edit' : '';
   return o;
 }
@@ -200,7 +201,7 @@ function m_createTenant_(d) {
     if (!t.expiry_date) t.expiry_date = addMonths_(start, Math.max(1, num(d.months) || 1));
     t.admin_username = user; t.created_at = nowIso(); t.updated_at = t.created_at; t.is_deleted = '0';
 
-    var ss = provisionTenant_(t, user, pass, !!d.demo, d.timezone);
+    var ss = provisionTenant_(t, user, pass, !!d.demo, d.timezone, bizType_(d.business_type));
     writeTenant_(t);
     mlog_('Client Created', code, t.company_name + ' · owner login: ' + user + (d.demo ? ' · with demo data' : ''));
     return { success:true, message:'Client created', tenant_id:code, admin_username:user, admin_password:pass,
@@ -209,14 +210,14 @@ function m_createTenant_(d) {
 }
 
 // create the client's own database spreadsheet in your Drive folder and fill it
-function provisionTenant_(t, user, pass, demo, tz) {
+function provisionTenant_(t, user, pass, demo, tz, btype) {
   var ss = SpreadsheetApp.create(APP_NAME + ' — ' + t.company_name + ' (' + t.tenant_id + ')');
   try { ss.setSpreadsheetTimeZone(tz || masterTz_()); } catch (e) {}
   var folders = DriveApp.getFoldersByName(TENANT_FOLDER_NAME);
   var folder = folders.hasNext() ? folders.next() : DriveApp.createFolder(TENANT_FOLDER_NAME);
   DriveApp.getFileById(ss.getId()).moveTo(folder);
   t.spreadsheet_id = ss.getId();
-  buildTenantDb_(ss, { tid: t.tenant_id, tenant: t, demo: !!demo,
+  buildTenantDb_(ss, { tid: t.tenant_id, tenant: t, demo: !!demo, business_type: btype,
     admin: { username:user, password:pass, email:t.email, name:t.owner_name, phone:t.phone },
     company: { name:t.company_name, phone:t.phone, whatsapp:t.phone } });
   return ss;
@@ -244,6 +245,7 @@ function signupCompany(d) {
       t.admin_username = user; t.notes = 'Signed up online'; t.created_at = nowIso(); t.updated_at = t.created_at; t.is_deleted = '0';
       writeTenant_(t);
       PropertiesService.getScriptProperties().setProperty('PW:' + code, pass); // used once at approval, then deleted
+      PropertiesService.getScriptProperties().setProperty('BT:' + code, bizType_(d.business_type));
     } finally { lock.releaseLock(); }
     c.put('SU:count', String(n + 1), 3600);
     mlog_('Sign-up Request', code, d.company_name + ' · ' + d.owner_name + ' · ' + d.phone);
@@ -270,9 +272,9 @@ function m_approveTenant_(code, d) {
     t.start_date = start;
     t.expiry_date = addMonths_(start, Math.max(1, num(d.months) || 1));
     t.status = 'active'; t.updated_at = nowIso();
-    provisionTenant_(t, t.admin_username, pass, !!d.demo, d.timezone);
+    provisionTenant_(t, t.admin_username, pass, !!d.demo, d.timezone, bizType_(d.business_type || props.getProperty('BT:' + t.tenant_id)));
     writeTenant_(t);
-    props.deleteProperty('PW:' + t.tenant_id);
+    props.deleteProperty('PW:' + t.tenant_id); props.deleteProperty('BT:' + t.tenant_id);
   } finally { lock.releaseLock(); }
   mlog_('Sign-up Approved', t.tenant_id, t.company_name + ' · until ' + t.expiry_date);
   if (t.email) {
@@ -291,6 +293,7 @@ function m_rejectTenant_(code) {
   t.is_deleted = '1'; t.updated_at = nowIso();
   writeTenant_(t);
   PropertiesService.getScriptProperties().deleteProperty('PW:' + t.tenant_id);
+  PropertiesService.getScriptProperties().deleteProperty('BT:' + t.tenant_id);
   mlog_('Sign-up Rejected', t.tenant_id, t.company_name);
   return { success:true, message:'Sign-up rejected' };
 }
@@ -304,6 +307,13 @@ function m_updateTenant_(code, d) {
   var t = findTenant_(code); if (!t) return { success:false, message:'Client not found' };
   cleanTenantFields_(t, d || {});
   if (!t.company_name) return { success:false, message:'Company name is required' };
+  if (d && d.business_type && t.spreadsheet_id) {
+    enterTenant_(t, 'Armedias');
+    var sh = db_().getSheetByName('Settings'), sd = sh.getDataRange().getValues(), row = 0;
+    for (var i = 1; i < sd.length; i++) if (sd[i][0] === 'business_type') row = i + 1;
+    if (row) sh.getRange(row, 2).setValue(bizType_(d.business_type)); else sh.appendRow(['business_type', bizType_(d.business_type)]);
+    CTX = null;
+  }
   t.updated_at = nowIso();
   writeTenant_(t);
   mlog_('Client Updated', t.tenant_id, Object.keys(d || {}).join(', '));
@@ -349,7 +359,7 @@ function computeStats_(t) {
     collected_month: round2(pays.filter(function(x){ return ymd_(x.payment_date).slice(0, 7) === month; }).reduce(function(a, x){ return a + num(x.amount); }, 0)),
     outstanding: round2(custs.reduce(function(a, c){ return a + Math.max(0, num(c.current_balance)); }, 0)),
     open_complaints: comps.filter(function(c){ return c.status === 'open' || c.status === 'in_progress'; }).length,
-    last_activity: lastAct, month: month
+    last_activity: lastAct, month: month, business_type: bizType_(settingsMap_().business_type)
   };
   CTX = null;
   t.stats_json = JSON.stringify(s); t.stats_at = nowIso();
@@ -434,6 +444,18 @@ function m_deleteTenant_(code) {
   writeTenant_(t);
   mlog_('Client Removed', t.tenant_id, 'Spreadsheet kept: ' + t.spreadsheet_id);
   return { success:true, message:'Client removed. Their spreadsheet is still in your Drive folder "' + TENANT_FOLDER_NAME + '".' };
+}
+
+function m_clearData_(code, confirmCode) {
+  var t = findTenant_(code); if (!t || !t.spreadsheet_id) return { success:false, message:'Client not found' };
+  if (normCode_(confirmCode) !== t.tenant_id) return { success:false, message:'Confirmation did not match the Company ID' };
+  enterTenant_(t, 'Armedias');
+  var n = clearBusinessData_(CTX.ss);
+  addLog('Armedias', 'Data Cleared', 'All business records removed by Armedias (' + n + ' rows). Logins and settings kept.');
+  CTX = null;
+  computeStats_(t);
+  mlog_('Client Data Cleared', t.tenant_id, n + ' rows removed');
+  return { success:true, message:'Cleared ' + n + ' records. Logins and settings were kept.' };
 }
 
 function m_logs_() {
