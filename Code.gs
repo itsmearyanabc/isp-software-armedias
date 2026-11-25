@@ -1567,14 +1567,14 @@ function sendReceiptWhatsApp(caller, paymentId) {
 function receiptLink(caller, paymentId) {
   if (!gate_(caller, 'payments', 'v')) return { success:false, message:'Access denied' };
   var r = receiptData_(paymentId); if (!r) return { success:false, message:'Payment not found' };
-  var props = PropertiesService.getScriptProperties(), key = 'RL:' + CTX.tid + ':' + r.pay.id, fid = props.getProperty(key), file = null;
-  if (fid) { try { file = DriveApp.getFileById(fid); if (file.isTrashed()) file = null; } catch (e) { file = null; } }
+  // re-use the same PDF if it was shared before (found by name — no per-receipt settings stored, so no storage limit)
+  var folders = DriveApp.getFoldersByName('AR Medias CRM — Shared receipts');
+  var folder = folders.hasNext() ? folders.next() : DriveApp.createFolder('AR Medias CRM — Shared receipts');
+  var fname = CTX.tid + '_' + r.pay.id + '_' + (r.pay.receipt_number || 'receipt') + '.pdf', it = folder.getFilesByName(fname), file = null;
+  while (it.hasNext()) { var f = it.next(); if (!f.isTrashed()) { file = f; break; } }
   if (!file) {
-    var folders = DriveApp.getFoldersByName('AR Medias CRM — Shared receipts');
-    var folder = folders.hasNext() ? folders.next() : DriveApp.createFolder('AR Medias CRM — Shared receipts');
-    file = folder.createFile(receiptPdf_(r)).setName(CTX.tid + '_' + (r.pay.receipt_number || r.pay.id) + '.pdf');
+    file = folder.createFile(receiptPdf_(r)).setName(fname);
     file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-    props.setProperty(key, file.getId());
     addLog(caller, 'Receipt Link Created', r.pay.receipt_number);
   }
   return { success:true, url:'https://drive.google.com/file/d/' + file.getId() + '/view', balance:round2(num(r.cust.current_balance)),
