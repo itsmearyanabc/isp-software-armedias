@@ -147,7 +147,8 @@ var API_CALLER = {
   getAreaBalances:0, getArrearsReport:0, getPeriodReport:0, getActionCenter:0, getPendingCounts:0,
   getCustomer360:0, getUserActivity:0, resetUserPassword:0, getSettings:0, saveSettings:0,
   childRead:0, childInsert:0, childDelete:0,
-  listApiKeys:0, createApiKey:0, revokeApiKey:0
+  listApiKeys:0, createApiKey:0, revokeApiKey:0,
+  getWhatsAppConfig:0, saveWhatsAppConfig:0, testWhatsApp:0, sendInvoiceWhatsApp:0
 };
 
 function api(token, fn, args) {
@@ -891,7 +892,8 @@ function getLookups(caller){
     vendors:   vis('vendors') ? lookupList_('vendors', ['vendor_name']) : [],
     banks:     vis('banks') ? lookupList_('banks', ['bank_name','account_number']) : [],
     users:     userLookup_(),
-    company:   settingsMap_()
+    company:   settingsMap_(),
+    whatsapp:  waPublic_()
   }};
 }
 
@@ -1368,6 +1370,97 @@ function revokeApiKey(caller, id) {
   PropertiesService.getScriptProperties().deleteProperty(k.prop);
   addLog(caller, 'API Key Revoked', k.label);
   return { success:true, message:'API key revoked — it stops working immediately' };
+}
+
+// ============== WhatsApp Business (official Meta Cloud API) ==============
+// Per company, stored in Script Properties 'WA:<companyId>' — the access token never goes back to the browser.
+var WA_GRAPH = 'https://graph.facebook.com/v21.0/';
+function waCfg_() { try { return JSON.parse(PropertiesService.getScriptProperties().getProperty('WA:' + CTX.tid) || '{}'); } catch (e) { return {}; } }
+function waPublic_() { var c = waCfg_(); return { enabled: !!(c.phone_id && c.token), auto: !!(c.auto && c.phone_id && c.token) }; }
+function waNumber_(phone) {
+  var cc = String(settingsMap_().phone_country_code || '91').replace(/\D/g, '') || '91';
+  var d = String(phone || '').replace(/\D/g, '');
+  if (d.indexOf('00') === 0) d = d.slice(2); else if (d.charAt(0) === '0') d = cc + d.slice(1); else if (d.length === 10) d = cc + d;
+  return d.length >= 10 ? d : '';
+}
+function waFetch_(c, path, opts) {
+  opts = opts || {}; opts.muteHttpExceptions = true;
+  opts.headers = { Authorization: 'Bearer ' + c.token };
+  var res = UrlFetchApp.fetch(WA_GRAPH + path, opts), body = {};
+  try { body = JSON.parse(res.getContentText() || '{}'); } catch (e) {}
+  if (res.getResponseCode() >= 300) throw new Error((body.error && (body.error.error_user_msg || body.error.message)) || ('WhatsApp API error ' + res.getResponseCode()));
+  return body;
+}
+
+function getWhatsAppConfig(caller) {
+  if (!gate_(caller, 'settings', 'e')) return { success:false, message:'Only the owner or an admin can manage WhatsApp' };
+  var c = waCfg_();
+  return { success:true, data:{ phone_id:c.phone_id || '', template:c.template || 'invoice_bill', lang:c.lang || 'en', auto:!!c.auto,
+    token_saved: !!c.token, token_hint: c.token ? '••••' + String(c.token).slice(-4) : '', number:c.number || '' } };
+}
+function saveWhatsAppConfig(caller, d) {
+  if (!gate_(caller, 'settings', 'e')) return { success:false, message:'Only the owner or an admin can manage WhatsApp' };
+  d = d || {}; var c = waCfg_();
+  if (d.disconnect) { PropertiesService.getScriptProperties().deleteProperty('WA:' + CTX.tid); addLog(caller, 'WhatsApp Disconnected', ''); return { success:true, message:'WhatsApp disconnected' }; }
+  c.phone_id = String(d.phone_id || '').replace(/\D/g, '');
+  if (d.token) c.token = String(d.token).trim();
+  c.template = String(d.template || 'invoice_bill').trim().toLowerCase();
+  c.lang = String(d.lang || 'en').trim();
+  c.auto = !!d.auto;
+  if (!c.phone_id || !c.token) return { success:false, message:'Phone Number ID and Access Token are required' };
+  try { var info = waFetch_(c, c.phone_id + '?fields=display_phone_number,verified_name'); c.number = (info.verified_name || '') + ' ' + (info.display_phone_number || ''); }
+  catch (e) { return { success:false, message:'Meta rejected these details: ' + e.message }; }
+  PropertiesService.getScriptProperties().setProperty('WA:' + CTX.tid, JSON.stringify(c));
+  addLog(caller, 'WhatsApp Connected', c.number + (c.auto ? ' · auto-send ON' : ''));
+  return { success:true, message:'Connected: ' + c.number };
+}
+function testWhatsApp(caller) {
+  if (!gate_(caller, 'settings', 'e')) return { success:false, message:'Access denied' };
+  var c = waCfg_(); if (!c.token) return { success:false, message:'Not connected yet' };
+  try { var info = waFetch_(c, c.phone_id + '?fields=display_phone_number,verified_name,quality_rating'); return { success:true, message:'Working ✔ ' + (info.verified_name || '') + ' ' + (info.display_phone_number || '') + (info.quality_rating ? ' · quality ' + info.quality_rating : '') }; }
+  catch (e) { return { success:false, message:e.message }; }
+}
+
+function invoicePdf_(inv, cust, co) {
+  var e = function(v){ return String(v == null ? '' : v).replace(/[&<>"]/g, function(c){ return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]; }); };
+  var cur = co.currency || 'INR', m = function(v){ return e(cur) + ' ' + round2(num(v)).toLocaleString('en-IN'); };
+  var net = round2(num(inv.amount) - num(inv.discount));
+  var row = function(l, v, b){ return '<tr><td style="padding:8px;border-bottom:1px solid #eee' + (b ? ';font-weight:700' : '') + '">' + l + '</td><td style="padding:8px;border-bottom:1px solid #eee;text-align:right' + (b ? ';font-weight:700' : '') + '">' + v + '</td></tr>'; };
+  var html = '<html><body style="font-family:Arial,sans-serif;color:#222;padding:24px">' +
+    '<table style="width:100%;border-bottom:3px solid #2B2F36;margin-bottom:16px"><tr><td><div style="font-size:22px;font-weight:700;color:#2B2F36">' + e(co.company_name) + '</div><div style="color:#666;font-size:12px">' + e(co.support_phone || '') + '</div></td>' +
+    '<td style="text-align:right"><div style="font-size:18px;font-weight:700;color:#b8962e">INVOICE / BILL</div><div style="font-size:12px">' + e(inv.invoice_number) + '</div></td></tr></table>' +
+    '<table style="width:100%;font-size:13px;margin-bottom:14px"><tr><td><b>Bill to:</b> ' + e(cust.full_name || '') + '<br>' + e(cust.phone || '') + '<br>' + e(cust.address || '') + '</td>' +
+    '<td style="text-align:right"><b>Date:</b> ' + e(ymd_(inv.created_at) || todayStr_()) + '<br><b>Due:</b> ' + e(ymd_(inv.due_date)) + '<br><b>Period:</b> ' + e(inv.billing_month || '') + '</td></tr></table>' +
+    '<table style="width:100%;border-collapse:collapse;font-size:13px">' +
+    row('Amount', m(inv.amount)) + row('Discount', '- ' + m(inv.discount)) + row('Net amount', m(net)) + row('Tax / GST', m(inv.tax)) + row('TOTAL', m(inv.total), true) +
+    (num(inv.previous_balance) > 0 ? row('Previous balance', m(inv.previous_balance)) : '') + '</table>' +
+    '<p style="margin-top:28px;color:#888;font-size:11px;text-align:center">Thank you — ' + e(co.company_name) + '</p></body></html>';
+  return HtmlService.createHtmlOutput(html).getBlob().getAs('application/pdf').setName((inv.invoice_number || 'invoice') + '.pdf');
+}
+
+function sendInvoiceWhatsApp(caller, invoiceId) {
+  if (!gate_(caller, 'invoices', 'v')) return { success:false, message:'Access denied' };
+  var c = waCfg_(); if (!c.phone_id || !c.token) return { success:false, message:'WhatsApp is not connected. Set it up in API & Integrations.' };
+  var inv = readObjs_('Invoices').filter(function(x){ return String(x.id) === String(invoiceId); })[0];
+  if (!inv) return { success:false, message:'Invoice not found' };
+  var cust = custById_(inv.customer_id) || {}, to = waNumber_(cust.phone);
+  if (!to) return { success:false, message:'This customer has no valid phone number' };
+  var co = settingsMap_();
+  try {
+    var pdf = invoicePdf_(inv, cust, co);
+    var media = waFetch_(c, c.phone_id + '/media', { method:'post', payload:{ messaging_product:'whatsapp', type:'application/pdf', file:pdf } });
+    var clean = function(v){ return String(v == null ? '' : v).replace(/[\r\n\t]+/g, ' ').replace(/ {4,}/g, '   ').slice(0, 200) || '-'; };
+    var msg = { messaging_product:'whatsapp', to:to, type:'template', template:{ name:c.template || 'invoice_bill', language:{ code:c.lang || 'en' }, components:[
+      { type:'header', parameters:[{ type:'document', document:{ id:media.id, filename:pdf.getName() } }] },
+      { type:'body', parameters:[ { type:'text', text:clean(cust.full_name || 'Customer') }, { type:'text', text:clean(inv.invoice_number) },
+                                   { type:'text', text:clean((co.currency || 'INR') + ' ' + round2(num(inv.total)).toLocaleString('en-IN')) } ] } ] } };
+    var sent = waFetch_(c, c.phone_id + '/messages', { method:'post', contentType:'application/json', payload:JSON.stringify(msg) });
+    addLog(caller, 'WhatsApp Bill Sent', inv.invoice_number + ' → ' + to + ' (' + ((sent.messages && sent.messages[0] && sent.messages[0].id) || 'ok') + ')');
+    return { success:true, message:'Bill ' + inv.invoice_number + ' sent on WhatsApp to +' + to };
+  } catch (e) {
+    addLog(caller, 'WhatsApp Bill Failed', inv.invoice_number + ': ' + e.message);
+    return { success:false, message:'WhatsApp: ' + e.message };
+  }
 }
 
 // ============== New company database builder ==============

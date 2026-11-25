@@ -2982,7 +2982,7 @@
       return 'https://wa.me/' + d + (msg ? '?text=' + encodeURIComponent(msg) : '');
     };
     const faPrefix = (icon) => (icon === 'fa-whatsapp' || icon === 'fa-facebook' || icon === 'fa-instagram') ? 'fab' : 'fas';
-    const AI_CLS = { 'fa-whatsapp':'ai-wa', 'fa-phone':'ai-call', 'fa-phone-volume':'ai-call', 'fa-money-bill-wave':'ai-pay', 'fa-file-invoice-dollar':'ai-pay', 'fa-hand-holding-dollar':'ai-pay', 'fa-coins':'ai-pay', 'fa-bolt':'ai-warn', 'fa-power-off':'ai-danger', 'fa-ban':'ai-danger', 'fa-print':'ai-info', 'fa-eye':'detail-icon' };
+    const AI_CLS = { 'fa-whatsapp':'ai-wa', 'fa-phone':'ai-call', 'fa-phone-volume':'ai-call', 'fa-money-bill-wave':'ai-pay', 'fa-file-invoice-dollar':'ai-pay', 'fa-hand-holding-dollar':'ai-pay', 'fa-coins':'ai-pay', 'fa-bolt':'ai-warn', 'fa-power-off':'ai-danger', 'fa-ban':'ai-danger', 'fa-print':'ai-info', 'fa-eye':'detail-icon', 'fa-paper-plane':'ai-wa' };
     const custPhone = (lk, id) => { const c = ((lk && lk.customers) || []).find(o => String(o.id) === String(id)); return c ? (c.phone || '') : ''; };
     const custName  = (lk, id) => { const c = ((lk && lk.customers) || []).find(o => String(o.id) === String(id)); return c ? (c.name || c.label || 'Customer') : 'Customer'; };
 
@@ -3202,6 +3202,29 @@
     const COUNTRIES = 'India|Pakistan|Bangladesh|Nepal|Sri Lanka|Bhutan|Maldives|United Arab Emirates|Saudi Arabia|Qatar|Oman|Kuwait|Bahrain|United States|United Kingdom|Canada|Australia|New Zealand|Singapore|Malaysia|Indonesia|Thailand|Philippines|Vietnam|Japan|China|Hong Kong|South Korea|Germany|France|Italy|Spain|Netherlands|Belgium|Switzerland|Sweden|Norway|Denmark|Ireland|Portugal|Poland|Russia|Turkey|Egypt|South Africa|Kenya|Nigeria|Brazil|Mexico|Argentina'.split('|');
     const INDIA_CITIES = ('Mumbai|Delhi|New Delhi|Bengaluru|Hyderabad|Ahmedabad|Chennai|Kolkata|Surat|Pune|Jaipur|Lucknow|Kanpur|Nagpur|Indore|Thane|Bhopal|Visakhapatnam|Pimpri-Chinchwad|Patna|Vadodara|Ghaziabad|Ludhiana|Agra|Nashik|Faridabad|Meerut|Rajkot|Kalyan-Dombivli|Vasai-Virar|Varanasi|Srinagar|Aurangabad|Dhanbad|Amritsar|Navi Mumbai|Prayagraj|Ranchi|Howrah|Coimbatore|Jabalpur|Gwalior|Vijayawada|Jodhpur|Madurai|Raipur|Kota|Guwahati|Chandigarh|Solapur|Hubballi-Dharwad|Tiruchirappalli|Bareilly|Mysuru|Tiruppur|Gurugram|Aligarh|Jalandhar|Bhubaneswar|Salem|Mira-Bhayandar|Warangal|Thiruvananthapuram|Guntur|Bhiwandi|Saharanpur|Gorakhpur|Bikaner|Amravati|Noida|Greater Noida|Jamshedpur|Bhilai|Cuttack|Firozabad|Kochi|Nellore|Bhavnagar|Dehradun|Durgapur|Asansol|Rourkela|Nanded|Kolhapur|Ajmer|Akola|Gulbarga|Jamnagar|Ujjain|Loni|Siliguri|Jhansi|Ulhasnagar|Jammu|Sangli|Mangaluru|Erode|Belagavi|Ambattur|Tirunelveli|Malegaon|Gaya|Udaipur|Kozhikode|Thrissur|Kollam|Davanagere|Kurnool|Rajahmundry|Bokaro|Bellary|Patiala|Agartala|Bhagalpur|Muzaffarnagar|Bhatpara|Panihati|Latur|Dhule|Tirupati|Rohtak|Korba|Bhilwara|Berhampur|Muzaffarpur|Ahmednagar|Mathura|Kakinada|Kollam|Bilaspur|Shahjahanpur|Satara|Bijapur|Rampur|Shivamogga|Chandrapur|Junagadh|Alwar|Bardhaman|Kulti|Nizamabad|Parbhani|Tumakuru|Khammam|Uzhavarkarai|Bihar Sharif|Panipat|Darbhanga|Bally|Aizawl|Dewas|Ichalkaranji|Karnal|Bathinda|Jalna|Eluru|Barasat|Purnia|Satna|Mau|Sonipat|Farrukhabad|Sagar|Durg|Imphal|Ratlam|Hapur|Arrah|Anantapur|Karimnagar|Etawah|Ambernath|North Dumdum|Bharatpur|Begusarai|Gandhidham|Baranagar|Tiruvottiyur|Puducherry|Sikar|Thoothukudi|Rewa|Mirzapur|Raichur|Pali|Ramagundam|Haridwar|Vijayanagaram|Katihar|Nagercoil|Sri Ganganagar|Karawal Nagar|Mango|Thanjavur|Bulandshahr|Uluberia|Murwara|Sambhal|Singrauli|Nadiad|Secunderabad|Naihati|Yamunanagar|Bidhannagar|Pallavaram|Bidar|Munger|Panchkula|Burhanpur|Kharagpur|Dindigul|Gandhinagar|Hospet|Nangloi Jat|Malda|Ongole|Deoghar|Chapra|Haldia|Khandwa|Nandyal|Morena|Amroha|Anand|Bhind|Bhalswa Jahangir Pur|Madhyamgram|Bhiwani|Berhampore|Ambala|Morbi|Fatehpur|Raebareli|Khora|Chittoor|Bhusawal|Orai|Bahraich|Phusro|Vellore|Mehsana|Raiganj|Sirsa|Danapur|Serampore|Sultan Pur Majra|Guna|Jaunpur|Panvel|Shivpuri|Surendranagar|Unnao|Chinsurah|Alappuzha|Kottayam|Machilipatnam|Shimla|Adoni|Udupi|Tenali|Proddatur|Saharsa|Hindupur|Sasaram|Hajipur|Bhimavaram|Kumbakonam|Dehri|Madanapalle|Siwan|Bettiah|Guntakal|Srikakulam|Motihari|Dharmavaram|Gudivada|Phagwara|Pudukkottai|Hosur|Narasaraopet|Suryapet|Miryalaguda|Tadipatri|Karaikudi|Kishanganj|Jamalpur|Ballia|Kavali|Tadepalligudem|Amaravati|Buxar|Jehanabad|Aurangabad (Bihar)|Gangtok|Itanagar|Kohima|Shillong|Port Blair|Daman|Silvassa|Kavaratti|Leh|Panaji|Margao|Vasco da Gama|Mapusa|Puri|Sambalpur|Balasore|Baripada|Jharsuguda|Hazaribagh|Giridih|Ramgarh|Medininagar|Haldwani|Rudrapur|Kashipur|Roorkee|Rishikesh|Nainital|Mussoorie|Solan|Mandi|Dharamshala|Kullu|Manali|Pathankot|Hoshiarpur|Mohali|Moga|Firozpur|Kapurthala|Zirakpur|Rewari|Hisar|Jind|Kaithal|Kurukshetra|Palwal|Bahadurgarh|Ayodhya|Mathura-Vrindavan|Gonda|Basti|Azamgarh|Sultanpur|Pratapgarh|Lakhimpur|Sitapur|Hardoi|Badaun|Pilibhit|Lalitpur|Banda|Chitrakoot|Ghazipur|Deoria|Kushinagar|Bijnor|Moradabad|Etah|Mainpuri|Kannauj|Kasganj|Hathras|Rae Bareli|Barabanki|Akbarpur|Bhadohi|Chandauli|Sonbhadra|Vidisha|Hoshangabad|Itarsi|Chhindwara|Seoni|Mandsaur|Neemuch|Shajapur|Sehore|Damoh|Chhatarpur|Tikamgarh|Datia|Betul|Harda|Balaghat|Mandla|Jagdalpur|Ambikapur|Raigarh|Rajnandgaon|Dhamtari|Mahasamund|Bhuj|Porbandar|Veraval|Navsari|Valsad|Vapi|Bharuch|Ankleshwar|Godhra|Dahod|Palanpur|Patan|Himmatnagar|Botad|Amreli|Ratnagiri|Sindhudurg|Kudal|Beed|Osmanabad|Yavatmal|Wardha|Gondia|Bhandara|Washim|Buldhana|Hingoli|Baramati|Lonavala|Karad|Hassan|Mandya|Chikkamagaluru|Chitradurga|Kolar|Karwar|Bagalkot|Gadag|Haveri|Koppal|Chamarajanagar|Madikeri|Kannur|Kasaragod|Palakkad|Malappuram|Pathanamthitta|Idukki|Wayanad|Ooty|Karur|Namakkal|Krishnagiri|Dharmapuri|Cuddalore|Villupuram|Kanchipuram|Tiruvannamalai|Nagapattinam|Ramanathapuram|Sivakasi|Virudhunagar|Theni|Rameswaram|Kanyakumari|Ariyalur|Perambalur|Mahbubnagar|Nalgonda|Adilabad|Siddipet|Mancherial|Sangareddy|Kadapa|Kurnool|Anakapalli|Bapatla|Chirala|Kalimpong|Darjeeling|Jalpaiguri|Cooch Behar|Bankura|Purulia|Midnapore|Krishnanagar|Shantiniketan|Dibrugarh|Jorhat|Silchar|Tezpur|Nagaon|Tinsukia|Bongaigaon|Dimapur|Tura|Agartala|Udaipur (Tripura)|Kargil|Anantnag|Baramulla|Sopore|Kathua|Udhampur').split('|').filter((c, i, a) => a.indexOf(c) === i).sort();
     let PHONE_CC = '91';
+    let WA = { enabled:false, auto:false };   // official WhatsApp API status for this company (from lookups)
+    // after a NEW invoice is saved: ASK whether to send the bill on WhatsApp (sends without asking only if the company ticked auto-send).
+    // Returns true when it showed its own popup (so the caller skips its "Saved" toast).
+    const autoSendBill = (module, r, currentUser, form, lk) => {
+      if (module !== 'invoices' || !r || !r.id) return false;
+      const viaApi = () => {
+        Swal.fire({ toast:true, position:'top-end', icon:'info', title:'Sending bill on WhatsApp…', showConfirmButton:false, timer:2500 });
+        gsRun('sendInvoiceWhatsApp', currentUser, r.id).then(x => Swal.fire({ toast:true, position:'top-end', icon:(x && x.success) ? 'success' : 'warning', title:(x && x.message) || 'WhatsApp failed', showConfirmButton:!(x && x.success), timer:(x && x.success) ? 3000 : undefined }));
+      };
+      if (WA.enabled && WA.auto) { viaApi(); return true; }
+      const f = form || {}, phone = custPhone(lk, f.customer_id), total = num0(f.amount) - num0(f.discount) + num0(f.tax);
+      const invNo = 'INV-' + String(r.id).padStart(5, '0');
+      Swal.fire({ icon:'success', title:'Invoice saved', text:'Send this bill to the customer on WhatsApp?', showCancelButton:true,
+          confirmButtonText:'<i class="fab fa-whatsapp"></i> Send on WhatsApp', cancelButtonText:'Not now', confirmButtonColor:'#1e7e34',
+          footer: WA.enabled ? 'Sent as a PDF through your WhatsApp Business number' : 'Opens WhatsApp with the bill details (connect the official API in API & Integrations to send PDF bills)' })
+        .then(res => {
+          if (!res.isConfirmed) return;
+          if (WA.enabled) return viaApi();
+          if (!telDigits(phone)) return Swal.fire({ icon:'info', title:'No phone number', text:'This customer has no phone number on file.' });
+          window.open(waLink(phone, `Dear ${custName(lk, f.customer_id)}, your bill ${invNo} for ${fmtMoney(total)} (due ${String(f.due_date || '').slice(0, 10)}) is ready. Thank you for your business — ${P.company || ''}`), '_blank');
+        });
+      return true;
+    };
     const cityOptions = (form) => (!form || !form.country || form.country === 'India') ? INDIA_CITIES : [];
 
     // ============== Entity enums + module config ==============
@@ -3330,6 +3353,7 @@
         actions:[
           {k:'pay', icon:'fa-money-bill-wave', label:'Record Payment', primary:true, type:'form', module:'payments', prefill:r=>({invoice_id:r.id, customer_id:r.customer_id, amount:r.balance}), when:r=>(Number(r.balance)||0)>0.009, gate:{page:'payments',perm:'a'}},
           {k:'remind', icon:'fa-whatsapp', label:'Send Reminder', type:'wa', phone:(r,lk)=>custPhone(lk,r.customer_id), msg:(r,lk)=>`Dear ${custName(lk,r.customer_id)}, invoice ${r.invoice_number} (${r.billing_month}) — previous balance ${fmtMoney(r.previous_balance)}, this month ${fmtMoney(r.total)}, payable now ${fmtMoney(r.balance)}, due ${String(r.due_date||'').slice(0,10)}. Kindly clear it ${P.dun}. Thank you.`, when:r=>(Number(r.balance)||0)>0.009},
+          {k:'wasend', icon:'fa-paper-plane', label:'Send bill on WhatsApp (API)', type:'fn', fn:'sendInvoiceWhatsApp', args:r=>[r.id], when:()=>WA.enabled, confirm:'Send this bill to the customer on WhatsApp?', confirmText:'A PDF bill is sent through your WhatsApp Business number.', gate:{page:'invoices',perm:'v'}},
           {k:'print', icon:'fa-print', label:'Print Invoice', type:'print', doc:'invoice'}
         ]
       },
@@ -3947,8 +3971,9 @@
         const p = editing ? gsRun('tblUpdate', currentUser, cfg.key, editing.id, formData) : gsRun('tblInsert', currentUser, cfg.key, formData);
         return p.then(r => {
           if (r && r.success) {
+            const asked = !editing && autoSendBill(cfg.key, r, currentUser, formData, lookupsRef.current);
             setShowModal(false); setEditing(null);
-            toastOk(r.message);
+            if (!asked) toastOk(r.message);
             refresh();
             if (cfg.key === 'customers') mutateLedger();
           } else Swal.fire({ icon:r && r.duplicate ? 'warning' : 'error', title:r && r.duplicate ? 'Duplicate not allowed' : 'Error', text:(r && r.message) || 'Failed' });
@@ -4008,7 +4033,7 @@
       };
 
       const saveQuick = (form) => gsRun('tblInsert', currentUser, quickForm.module, form).then(r => {
-        if (r && r.success) { setQuickForm(null); Swal.fire({ icon:'success', title:'Saved', timer:1300, showConfirmButton:false }); swrMutate(MODULES[quickForm.module].page + ':all'); refresh(); }
+        if (r && r.success) { if (!autoSendBill(quickForm.module, r, currentUser, form, lookupsRef.current)) toastOk('Saved'); setQuickForm(null); swrMutate(MODULES[quickForm.module].page + ':all'); refresh(); }
         else Swal.fire({ icon:r && r.duplicate ? 'warning' : 'error', title:r && r.duplicate ? 'Duplicate not allowed' : 'Error', text:(r && r.message) || 'Failed' });
       }).catch(err => Swal.fire({ icon:'error', title:'Error', text:err.message }));
 
@@ -4415,6 +4440,57 @@
       const fb = () => { const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); ok(); } catch (e) {} ta.remove(); };
       if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(ok, fb); else fb();
     };
+    function WhatsAppCard({ currentUser }) {
+      const { data, mutate } = useSWR('wa:cfg', () => gsRun('getWhatsAppConfig', currentUser), { revalidateOnFocus:false });
+      const c = (data && data.success) ? data.data : null;
+      const [f, setF] = useState(null);
+      const [busy, setBusy] = useState(false);
+      const [help, setHelp] = useState(false);
+      useEffect(() => { if (c && !f) setF({ phone_id:c.phone_id, token:'', template:c.template, lang:c.lang, auto:c.auto }); }, [c]);
+      if (!c || !f) return <div className="lte-card"><div className="lte-card-head"><i className="fab fa-whatsapp"></i> WhatsApp Business API</div><div className="lte-card-body"><TableSkeleton rows={2} columns={2} /></div></div>;
+      const set = (k) => (e) => setF({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value });
+      const done = (r) => { setBusy(false); Swal.fire({ icon:(r && r.success) ? 'success' : 'error', title:(r && r.success) ? 'WhatsApp' : 'Not saved', text:(r && r.message) || 'Failed' }); if (r && r.success) { mutate(); swrMutate('lookups'); setF({ ...f, token:'' }); } };
+      const save = () => { setBusy(true); gsRun('saveWhatsAppConfig', currentUser, f).then(done).catch(e => done({ message:e.message })); };
+      const test = () => { setBusy(true); gsRun('testWhatsApp', currentUser).then(done).catch(e => done({ message:e.message })); };
+      const disconnect = () => Swal.fire({ icon:'warning', title:'Disconnect WhatsApp?', text:'Bills will no longer be sent through the API.', showCancelButton:true, confirmButtonColor:'#ea4335', confirmButtonText:'Disconnect' })
+        .then(res => { if (res.isConfirmed) { setBusy(true); gsRun('saveWhatsAppConfig', currentUser, { disconnect:true }).then(r => { done(r); setF({ phone_id:'', token:'', template:'invoice_bill', lang:'en', auto:false }); }); } });
+      return (
+        <div className="lte-card">
+          <div className="lte-card-head"><i className="fab fa-whatsapp"></i> WhatsApp Business API (official) — send bills automatically
+            <span style={{ marginLeft:'auto', fontSize:12 }}>{c.token_saved ? <span className="eb eb-ok">Connected {c.number}</span> : <span className="eb eb-neutral">Not connected</span>}</span></div>
+          <div className="lte-card-body">
+            <div className="form-grid">
+              <div className="form-group"><label>Phone Number ID *</label><input value={f.phone_id} onChange={set('phone_id')} placeholder="e.g. 109876543210987" /></div>
+              <div className="form-group"><label>Permanent Access Token * {c.token_saved && <span style={{ color:'#888', fontWeight:400 }}>(saved {c.token_hint} — leave empty to keep)</span>}</label><input type="password" value={f.token} onChange={set('token')} autoComplete="off" placeholder={c.token_saved ? 'Leave empty to keep the saved token' : 'EAAG…'} /></div>
+              <div className="form-group"><label>Template name</label><input value={f.template} onChange={set('template')} /></div>
+              <div className="form-group"><label>Template language code</label><input value={f.lang} onChange={set('lang')} placeholder="en" /></div>
+            </div>
+            <label style={{ display:'flex', alignItems:'center', gap:8, margin:'0 0 14px', fontSize:14 }}><input type="checkbox" checked={!!f.auto} onChange={set('auto')} style={{ width:18, height:18 }} /> Skip the question and <b>send every new bill automatically</b> (optional — leave unticked to be asked each time)</label>
+            <p style={{ fontSize:13, color:'#666', marginBottom:12 }}>By default, after saving an invoice you are asked <i>"Send this bill on WhatsApp?"</i>. You can also send any bill later with the <i className="fas fa-paper-plane"></i> button on the Invoices page.</p>
+            <div className="form-actions" style={{ marginTop:0 }}>
+              <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? <><i className="fas fa-spinner fa-spin"></i> Checking with Meta…</> : <><i className="fas fa-save"></i> Save & connect</>}</button>
+              {c.token_saved && <button className="btn btn-secondary" disabled={busy} onClick={test}><i className="fas fa-plug-circle-check"></i> Test connection</button>}
+              {c.token_saved && <button className="btn btn-danger" disabled={busy} onClick={disconnect}><i className="fas fa-link-slash"></i> Disconnect</button>}
+              <button className="btn btn-secondary" onClick={() => setHelp(!help)}><i className="fas fa-circle-question"></i> {help ? 'Hide' : 'How to set up'}</button>
+            </div>
+            {help && (
+              <div style={{ marginTop:14, fontSize:13.5, lineHeight:1.7, background:'#f8f9fb', border:'1px solid #e3e6eb', borderRadius:10, padding:'12px 16px' }}>
+                <ol style={{ paddingLeft:18 }}>
+                  <li>Go to <b>developers.facebook.com</b> → My Apps → <b>Create app</b> → type <b>Business</b> → add the <b>WhatsApp</b> product.</li>
+                  <li>In <b>WhatsApp → API Setup</b>, add and verify your business phone number. Copy its <b>Phone number ID</b>.</li>
+                  <li>Create a permanent token: <b>business.facebook.com → Settings → System users</b> → add a system user (Admin) → <b>Add assets</b> → your app → <b>Generate token</b> with permissions <code>whatsapp_business_messaging</code> and <code>whatsapp_business_management</code>.</li>
+                  <li>In <b>WhatsApp Manager → Message templates → Create template</b>: category <b>Utility</b>, name <code>invoice_bill</code>, language English (<code>en</code>), <b>Header: Document</b>, Body:<br />
+                    <code>Hello {'{{1}}'}, thank you for your purchase. Your bill {'{{2}}'} for {'{{3}}'} is attached.</code><br />Submit it and wait for <b>Approved</b> (usually minutes).</li>
+                  <li>Paste the Phone number ID and token above, keep template <code>invoice_bill</code> / <code>en</code>, tick auto-send if you want, and click <b>Save & connect</b>.</li>
+                </ol>
+                <p style={{ marginTop:8, color:'#888' }}>Meta charges per conversation according to its own pricing. Customers' phone numbers use your Settings → WhatsApp Country Code.</p>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
     function IntegrationsView({ currentUser }) {
       const { data, mutate } = useSWR('apikeys', () => gsRun('listApiKeys', currentUser), { revalidateOnFocus:false });
       const d = (data && data.success) ? data : null;
@@ -4433,6 +4509,7 @@
       if (!data) return <div className="data-section"><TableSkeleton rows={4} columns={4} /></div>;
       if (!d) return <NoAccessView />;
       const ep = d.endpoint;
+      const waCard = <WhatsAppCard currentUser={currentUser} />;
       const ex1 = `{\n  "api_key": "amk_YOUR_KEY",\n  "action": "leads.create",\n  "data": {\n    "full_name": "Ali Khan",\n    "phone": "0300-1234567",\n    "email": "ali@example.com",\n    "source": "website",\n    "notes": "Interested in the premium plan"\n  }\n}`;
       const curl = `curl -L "${ep}" \\\n  -H "Content-Type: text/plain" \\\n  -d '${ex1.replace(/\n\s*/g, ' ')}'`;
       const pre = (t) => <pre style={{ background:'#0f172a', color:'#e2e8f0', padding:12, borderRadius:8, fontSize:12.5, overflowX:'auto', whiteSpace:'pre' }}>{t}</pre>;
@@ -4447,6 +4524,7 @@
       ];
       return (
         <div className="data-section">
+          {waCard}
           <div className="lte-card">
             <div className="lte-card-head"><i className="fas fa-key"></i> API keys <span style={{ marginLeft:'auto' }}><button className="btn btn-success btn-sm" onClick={create}><i className="fas fa-plus"></i> New API key</button></span></div>
             <div className="lte-card-body" style={{ padding:0, overflowX:'auto' }}>
@@ -4566,6 +4644,7 @@
     // ============== Main Content Router ==============
     function MainContent({ activeMenu, user, email, role, perms, canEditRbac, onSettingsUpdate, onNav }) {
       const lookups = useLookups(user);
+      if (lookups && lookups.whatsapp) WA = lookups.whatsapp;
       if (MODULES[activeMenu]) {
         const cfg = MODULES[activeMenu];
         return can(perms, cfg.page, 'v') ? <EntityView key={cfg.key} cfg={cfg} currentUser={user} perms={perms} lookups={lookups} /> : <NoAccessView />;
