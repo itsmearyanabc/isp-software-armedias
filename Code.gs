@@ -196,7 +196,7 @@ function authenticateUser(companyId, username, password) {
       touchTenantLogin_(t.tenant_id, username);
       return {
         success: true, token: token,
-        companyId: t.tenant_id, companyName: t.company_name, daysLeft: daysLeft_(t.expiry_date), businessType: bizType_(settingsMap_().business_type),
+        companyId: t.tenant_id, companyName: t.company_name, daysLeft: daysLeft_(t.expiry_date), businessType: bizType_(settingsMap_().business_type), phoneCode: String(settingsMap_().phone_country_code || '91').replace(/\D/g, '') || '91',
         username: username, email: data[i][1], role: data[i][3],
         profileImage: data[i][5] || '', themeMode: data[i][6] || 'light', customColors: data[i][7] || '',
         permissions: rbacPermsFor_(data[i][3]), canEditRbac: canEditRbac_(data[i][3])
@@ -569,7 +569,7 @@ function getLogs(callerUser) {
 
 // ============== Generic Table Engine ==============
 var TBL = {
-  areas:        { sheet:'Areas',          cols:['name','city','description','status'] },
+  areas:        { sheet:'Areas',          cols:['name','city','description','status','country'] },
   packages:     { sheet:'Packages',       cols:['name','speed_mbps','price','billing_cycle','description','status'] },
   customers:    { sheet:'Customers',      cols:['customer_code','full_name','phone','email','cnic','address','area_id','package_id','installation_date','monthly_due_day','ip_address','mac_address','connection_status','opening_balance','notes','previous_balance','current_balance'] },
   invoices:     { sheet:'Invoices',       cols:['invoice_number','customer_id','package_id','billing_month','amount','discount','tax','total','previous_balance','due_date','status','paid_amount','balance'] },
@@ -655,6 +655,12 @@ function custById_(id){
 }
 
 function tblSheet_(key){ var t = TBL[key]; if (!t) return null; return db_().getSheetByName(t.sheet); }
+function ensureCols_(sh, key){
+  var w = sh.getLastColumn(); if (!w) return;
+  var head = sh.getRange(1, 1, 1, w).getValues()[0], miss = tblHeader_(key).filter(function(h){ return head.indexOf(h) === -1; });
+  if (!miss.length) return;
+  sh.getRange(1, w + 1, 1, miss.length).setValues([miss]).setBackground('#33383d').setFontColor('white').setFontWeight('bold');
+}
 function tblHeader_(key){ return ['id'].concat(TBL[key].cols, ['is_deleted','created_at','updated_at']); }
 
 function readObjs_(sheetName){
@@ -684,8 +690,12 @@ function tblNextId_(sh, head){
   return mx + 1;
 }
 
-function tblAfterWrite_(key){
+function tblAfterWrite_(key, obj, op){
   if (['payments','invoices','customers'].indexOf(key) === -1) return;
+  if (key === 'customers' && op !== 'delete') {
+    obj = obj || {};
+    if (op === 'insert' ? !num(obj.opening_balance) : obj.opening_balance === undefined) return; // status/name/phone edits: no money moved
+  }
   try { recalcBalances_(); } catch (e) { Logger.log('recalc failed: ' + e); }
 }
 
@@ -697,6 +707,7 @@ function tblInsert(caller, key, obj){
   try { lock.waitLock(20000); } catch (e) { return { success:false, message:'System is busy, please try again' }; }
   var id;
   try {
+    ensureCols_(sh, key);
     var data = sh.getDataRange().getValues(), head = sheetHead_(sh, key), hook = TBL_HOOKS[key] || {};
     // plan limit set by Armedias in the Master Console (0 = unlimited)
     var maxC = num(CTX.tenant && CTX.tenant.max_customers);
@@ -721,7 +732,7 @@ function tblInsert(caller, key, obj){
     }));
   } finally { lock.releaseLock(); }
   addLog(caller, key + ' Added', '#' + id);
-  tblAfterWrite_(key);
+  tblAfterWrite_(key, obj, 'insert');
   return { success:true, message:'Saved successfully!', id:id };
 }
 
@@ -732,6 +743,7 @@ function tblUpdate(caller, key, id, obj){
   var lock = LockService.getScriptLock();
   try { lock.waitLock(20000); } catch (e) { return { success:false, message:'System is busy, please try again' }; }
   try {
+    ensureCols_(sh, key);
     var data = sh.getDataRange().getValues(), head = data[0], idc = head.indexOf('id'), hook = TBL_HOOKS[key] || {};
     for (var i = 1; i < data.length; i++){
       if (String(data[i][idc]) !== String(id)) continue;
@@ -744,7 +756,7 @@ function tblUpdate(caller, key, id, obj){
       row.is_deleted = data[i][head.indexOf('is_deleted')];
       sh.getRange(i + 1, 1, 1, head.length).setValues([head.map(function(h){ return (row[h] !== undefined && row[h] !== null) ? row[h] : ''; })]);
       addLog(caller, key + ' Updated', '#' + id);
-      tblAfterWrite_(key);
+      tblAfterWrite_(key, obj, 'update');
       return { success:true, message:'Updated successfully!' };
     }
   } finally { lock.releaseLock(); }
@@ -759,7 +771,7 @@ function tblDelete(caller, key, id){
     if (String(data[i][idc]) === String(id)){
       sh.getRange(i+1, di+1).setValue(1);
       addLog(caller, key + ' Deleted', '#' + id);
-      tblAfterWrite_(key);
+      tblAfterWrite_(key, null, 'delete');
       return { success:true, message:'Deleted successfully!' };
     }
   }
@@ -1179,7 +1191,7 @@ function resetUserPassword(caller, username, newPwd){
 // ============== Company settings (key/value) ==============
 function settingsMap_(){
   var sh = db_().getSheetByName('Settings');
-  var out = { company_name:(CTX.tenant && CTX.tenant.company_name) || 'My Business', currency:'PKR', support_phone:'', whatsapp_number:'', invoice_prefix:'INV', late_fee_pct:'0' };
+  var out = { company_name:(CTX.tenant && CTX.tenant.company_name) || 'My Business', currency:'INR', phone_country_code:'91', support_phone:'', whatsapp_number:'', invoice_prefix:'INV', late_fee_pct:'0' };
   if (!sh) return out;
   var data = sh.getDataRange().getValues();
   for (var i = 1; i < data.length; i++) if (data[i][0]) out[data[i][0]] = data[i][1];
@@ -1426,7 +1438,7 @@ function buildTenantDb_(ss, opts) {
     usersSheet.appendRow([A.username, A.email || '', A.password, 'super_admin', 'Active', '', 'light', '', ts, 'Armedias', ts, 'Armedias', A.name || '', A.phone || '', '', 0, '', '']);
 
     var settingsSheet = ss.getSheetByName('Settings');
-    [['company_name', co.name || ''], ['business_type', BT], ['currency','PKR'], ['invoice_prefix','INV'], ['support_phone', co.phone || ''], ['whatsapp_number', co.whatsapp || co.phone || ''], ['late_fee_pct','0']]
+    [['company_name', co.name || ''], ['business_type', BT], ['currency','INR'], ['phone_country_code','91'], ['invoice_prefix','INV'], ['support_phone', co.phone || ''], ['whatsapp_number', co.whatsapp || co.phone || ''], ['late_fee_pct','0']]
       .forEach(function(kv){ settingsSheet.appendRow(kv); });
     settingsSheet.getRange('B:B').setNumberFormat('@');
 
@@ -1437,7 +1449,7 @@ function buildTenantDb_(ss, opts) {
         usersSheet.appendRow([u[0], '', Utilities.getUuid().slice(0, 10), u[1], 'Inactive', '', 'light', '', ts, 'Armedias', ts, 'Armedias', u[2], '', '', 0, '', '']);
       });
 
-      seedAll('areas', DEMO.areas.map(function(n){ return { name:n, city:'', description:'', status:'active' }; }), ts);
+      seedAll('areas', DEMO.areas.map(function(n){ return { name:n, city:'', description:'', status:'active', country:'India' }; }), ts);
 
       var pkgPrice = [0].concat(DEMO.pk.map(function(p){ return p[2]; }));
       seedAll('packages', DEMO.pk.map(function(p){ return { name:p[0], speed_mbps:p[1] || '', price:p[2], billing_cycle:p[3], description:'', status:'active' }; }), ts);
@@ -1482,8 +1494,8 @@ function buildTenantDb_(ss, opts) {
       ], ts);
 
       seedAll('banks', [
-        { account_name:'Main Operating Account', account_title:co.name || 'Company', bank_name:'Demo Bank Ltd', branch_name:'Main Branch', account_number:'0001234567', iban:'PK00DEMO0001234567', account_type:'current', currency:'PKR', opening_balance:200000, current_balance:435000, is_default:1, status:'active', notes:'' },
-        { account_name:'Field Cash Drawer',      account_title:co.name || 'Company', bank_name:'Cash',          branch_name:'',            account_number:'CASH-01',    iban:'',                   account_type:'cash',    currency:'PKR', opening_balance:0,      current_balance:15000,  is_default:0, status:'active', notes:'Daily collection cash' }
+        { account_name:'Main Operating Account', account_title:co.name || 'Company', bank_name:'Demo Bank Ltd', branch_name:'Main Branch', account_number:'0001234567', iban:'PK00DEMO0001234567', account_type:'current', currency:'INR', opening_balance:200000, current_balance:435000, is_default:1, status:'active', notes:'' },
+        { account_name:'Field Cash Drawer',      account_title:co.name || 'Company', bank_name:'Cash',          branch_name:'',            account_number:'CASH-01',    iban:'',                   account_type:'cash',    currency:'INR', opening_balance:0,      current_balance:15000,  is_default:0, status:'active', notes:'Daily collection cash' }
       ], ts);
 
       seedAll('complaints', [

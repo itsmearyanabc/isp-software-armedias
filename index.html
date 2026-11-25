@@ -1713,7 +1713,11 @@
     const swrRefreshAll = () => { const ps = []; _swr.fetchers.forEach((f, k) => ps.push(swrRevalidate(k, f, 0))); return Promise.all(ps); };
 
     const LEDGER_KEYS = ['customers:all','invoices:all','payments:all','recovery','areabalance','dash:stats','dash:action','lookups'];
-    const mutateLedger = () => { LEDGER_KEYS.forEach(k => swrMutate(k)); _swr.data.forEach((v, k) => { if (k.indexOf('dues:') === 0 || k.indexOf('c360:') === 0 || k.indexOf('arrears:') === 0 || k.indexOf('report:') === 0) swrMutate(k); }); };
+    // reload a key now only if a screen is showing it; otherwise mark it stale so it reloads when opened
+    const swrRefresh = (k) => { const subs = _swr.subs.get(k); if (subs && subs.size) return swrMutate(k); const e = _swr.data.get(k); if (e) e.ts = 0; return Promise.resolve(); };
+    const mutateLedger = () => { LEDGER_KEYS.forEach(swrRefresh); _swr.data.forEach((v, k) => { if (k.indexOf('dues:') === 0 || k.indexOf('c360:') === 0 || k.indexOf('arrears:') === 0 || k.indexOf('report:') === 0) swrRefresh(k); }); };
+    // small non-blocking confirmation in the corner
+    const toastOk = (text) => Swal.fire({ toast:true, position:'top-end', icon:'success', title:text || 'Saved', showConfirmButton:false, timer:1500 });
 
     // page registry — drives sidebar, header title, routing
     const PAGE_META = {
@@ -1755,7 +1759,8 @@
     let P = { ...BIZ.isp, type:'isp', company:'', applied:false };
     const HIDDEN = new Set();
     // call once per page load, before the app renders (MODULES / PAGE_META are adjusted in place)
-    function applyProfile(type, company) {
+    function applyProfile(type, company, cc) {
+      if (cc) PHONE_CC = String(cc).replace(/\D/g, '') || '91';
       type = BIZ[type] ? type : 'isp';
       if (P.applied) { P.company = company || P.company; return P.type === type; }
       P = { ...BIZ[type], type, company: company || '', applied:true };
@@ -1771,7 +1776,7 @@
       M.customers.cols.forEach(c => { if (c.d === 'area_id') c.t = P.area; if (c.d === 'package_id' && c.f === 'name') c.t = P.package; });
       fld('leads','area_id').l = P.area; fld('leads','package_interested_id').l = P.package + ' Interested';
       fld('invoices','package_id').l = P.package; fld('invoices','package_id').req = false;
-      fld('packages','name').l = P.package + ' Name';
+      fld('packages','name').l = P.package + ' Name'; fld('areas','name').l = P.area + ' Name';
       if (type === 'isp') return true;
       M.customers.fields = M.customers.fields.filter(f => f.n !== 'ip_address' && f.n !== 'mac_address');
       fld('customers','cnic').l = 'ID / CNIC'; fld('customers','connection_status').l = 'Status';
@@ -1953,7 +1958,6 @@
 
             <div className="sidebar-header">
               <div className="sidebar-title">
-                <i className="fas fa-wifi"></i>
                 <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:170 }}>{companyName || APP_NAME}</span>
               </div>
               <button className="collapse-btn" onClick={() => setCollapsed(!collapsed)}>
@@ -2610,7 +2614,7 @@
       const [form, setForm] = useState(null);
       const [saving, setSaving] = useState(false);
       const [busy, setBusy] = useState(false);
-      useEffect(() => { if (cfg && !form) setForm({ business_type:cfg.business_type || 'isp', company_name:cfg.company_name || '', whatsapp_number:cfg.whatsapp_number || '', support_phone:cfg.support_phone || '', currency:cfg.currency || 'PKR', invoice_prefix:cfg.invoice_prefix || 'INV', late_fee_pct:cfg.late_fee_pct || '0' }); }, [cfg]);
+      useEffect(() => { if (cfg && !form) setForm({ business_type:cfg.business_type || 'isp', company_name:cfg.company_name || '', whatsapp_number:cfg.whatsapp_number || '', support_phone:cfg.support_phone || '', currency:cfg.currency || 'INR', phone_country_code:cfg.phone_country_code || '91', invoice_prefix:cfg.invoice_prefix || 'INV', late_fee_pct:cfg.late_fee_pct || '0' }); }, [cfg]);
       if (!form) return (
         <div className="lte-card" style={{ marginBottom:20 }}>
           <div className="lte-card-head"><i className="fas fa-sliders"></i> Company / System Settings</div>
@@ -2620,13 +2624,14 @@
       const set = (k, v) => setForm({ ...form, [k]: v });
       const save = () => { setSaving(true); gsRun('saveSettings', currentUser, form).then(r => { setSaving(false); if (r && r.success) {
           if (form.business_type !== (cfg.business_type || 'isp')) { writeSession({ businessType: form.business_type }); Swal.fire({ icon:'success', title:'Saved', text:'Reloading with your new business type…', timer:1300, showConfirmButton:false }).then(() => window.location.reload()); return; }
+          PHONE_CC = String(form.phone_country_code || '91').replace(/\D/g, '') || '91'; writeSession({ phoneCode: PHONE_CC });
           Swal.fire({ icon:'success', title:'Saved', timer:1300, showConfirmButton:false }); mutate(); swrMutate('lookups'); } else Swal.fire({ icon:'error', title:'Error', text:(r && r.message) || 'Failed' }); }).catch(() => setSaving(false)); };
       const recalc = () => { setBusy(true); gsRun('recalcAllBalances', currentUser)
         .then(r => { Swal.fire({ icon:(r && r.success) ? 'success' : 'error', title:(r && r.success) ? 'Balances rebuilt' : 'Error', text:(r && r.message) || 'Failed', timer:(r && r.success) ? 1800 : undefined, showConfirmButton:!(r && r.success) });
           LEDGER_KEYS.forEach(k => swrMutate(k)); })
         .catch(e => Swal.fire({ icon:'error', title:'Error', text:e.message }))
         .finally(() => setBusy(false)); };
-      const fields = [ ['company_name','Company Name','fa-building'], ['whatsapp_number','WhatsApp Number','fa-comment-dots'], ['support_phone','Support Phone','fa-phone'], ['currency','Currency','fa-coins'], ['invoice_prefix','Invoice Prefix','fa-hashtag'], ['late_fee_pct','Late Fee %','fa-percent'] ];
+      const fields = [ ['company_name','Company Name','fa-building'], ['whatsapp_number','WhatsApp Number','fa-comment-dots'], ['support_phone','Support Phone','fa-phone'], ['currency','Currency','fa-coins'], ['phone_country_code','WhatsApp Country Code (91 = India)','fa-globe'], ['invoice_prefix','Invoice Prefix','fa-hashtag'], ['late_fee_pct','Late Fee %','fa-percent'] ];
       return (
         <div className="lte-card" style={{ marginBottom:20 }}>
           <div className="lte-card-head"><i className="fas fa-sliders"></i> Company / System Settings</div>
@@ -2970,7 +2975,10 @@
     };
     const telDigits = (p) => String(p || '').replace(/[^0-9]/g, '');
     const waLink = (phone, msg) => {
-      let d = telDigits(phone); if (d.startsWith('0')) d = '92' + d.slice(1);
+      let d = telDigits(phone);
+      if (d.startsWith('00')) d = d.slice(2);
+      else if (d.startsWith('0')) d = PHONE_CC + d.slice(1);
+      else if (d.length === 10) d = PHONE_CC + d;   // local mobile number without 0 (e.g. 98xxxxxxxx)
       return 'https://wa.me/' + d + (msg ? '?text=' + encodeURIComponent(msg) : '');
     };
     const faPrefix = (icon) => (icon === 'fa-whatsapp' || icon === 'fa-facebook' || icon === 'fa-instagram') ? 'fab' : 'fas';
@@ -3150,18 +3158,20 @@
     }
 
     // ============== SearchableDropdown ==============
-    function SearchableDropdown({ options, value, onChange, placeholder, disabled }) {
+    function SearchableDropdown({ options, value, onChange, placeholder, disabled, allowCustom }) {
       const [open, setOpen] = useState(false);
       const [q, setQ] = useState('');
       const ref = useRef(null);
       const opts = (options || []).map(o => (typeof o === 'object' && o !== null) ? o : { id:o, label:String(o) });
-      const sel = opts.find(o => String(o.id) === String(value));
+      let sel = opts.find(o => String(o.id) === String(value));
+      if (!sel && allowCustom && value) sel = { id:value, label:String(value) };
       useEffect(() => {
         const h = (e) => { if (ref.current && !ref.current.contains(e.target)) { setOpen(false); setQ(''); } };
         document.addEventListener('mousedown', h);
         return () => document.removeEventListener('mousedown', h);
       }, []);
-      const filtered = opts.filter(o => String(o.label).toLowerCase().includes(q.toLowerCase()));
+      const filtered = opts.filter(o => String(o.label).toLowerCase().includes(q.toLowerCase())).slice(0, 300);
+      const custom = allowCustom && q.trim() && !opts.some(o => String(o.label).toLowerCase() === q.trim().toLowerCase());
       const pick = (v) => { onChange(v); setOpen(false); setQ(''); };
       return (
         <div className={`sdrop ${disabled ? 'disabled' : ''} ${open ? 'open' : ''}`} ref={ref}>
@@ -3177,9 +3187,10 @@
               </div>
               <div className="sdrop-options">
                 {placeholder !== undefined && <div className="sdrop-opt" onClick={() => pick('')}>{placeholder}</div>}
+                {custom && <div className="sdrop-opt" onClick={() => pick(q.trim())}><i className="fas fa-plus"></i> Use “{q.trim()}”</div>}
                 {filtered.length ? filtered.map(o => (
                   <div key={o.id} className={`sdrop-opt ${String(o.id) === String(value) ? 'active' : ''}`} onClick={() => pick(o.id)}>{o.label}</div>
-                )) : <div className="sdrop-empty">No matches</div>}
+                )) : (!custom && <div className="sdrop-empty">No matches</div>)}
               </div>
             </div>
           )}
@@ -3187,10 +3198,16 @@
       );
     }
 
+    // ============== Countries & Indian cities (pick from list or type your own) ==============
+    const COUNTRIES = 'India|Pakistan|Bangladesh|Nepal|Sri Lanka|Bhutan|Maldives|United Arab Emirates|Saudi Arabia|Qatar|Oman|Kuwait|Bahrain|United States|United Kingdom|Canada|Australia|New Zealand|Singapore|Malaysia|Indonesia|Thailand|Philippines|Vietnam|Japan|China|Hong Kong|South Korea|Germany|France|Italy|Spain|Netherlands|Belgium|Switzerland|Sweden|Norway|Denmark|Ireland|Portugal|Poland|Russia|Turkey|Egypt|South Africa|Kenya|Nigeria|Brazil|Mexico|Argentina'.split('|');
+    const INDIA_CITIES = ('Mumbai|Delhi|New Delhi|Bengaluru|Hyderabad|Ahmedabad|Chennai|Kolkata|Surat|Pune|Jaipur|Lucknow|Kanpur|Nagpur|Indore|Thane|Bhopal|Visakhapatnam|Pimpri-Chinchwad|Patna|Vadodara|Ghaziabad|Ludhiana|Agra|Nashik|Faridabad|Meerut|Rajkot|Kalyan-Dombivli|Vasai-Virar|Varanasi|Srinagar|Aurangabad|Dhanbad|Amritsar|Navi Mumbai|Prayagraj|Ranchi|Howrah|Coimbatore|Jabalpur|Gwalior|Vijayawada|Jodhpur|Madurai|Raipur|Kota|Guwahati|Chandigarh|Solapur|Hubballi-Dharwad|Tiruchirappalli|Bareilly|Mysuru|Tiruppur|Gurugram|Aligarh|Jalandhar|Bhubaneswar|Salem|Mira-Bhayandar|Warangal|Thiruvananthapuram|Guntur|Bhiwandi|Saharanpur|Gorakhpur|Bikaner|Amravati|Noida|Greater Noida|Jamshedpur|Bhilai|Cuttack|Firozabad|Kochi|Nellore|Bhavnagar|Dehradun|Durgapur|Asansol|Rourkela|Nanded|Kolhapur|Ajmer|Akola|Gulbarga|Jamnagar|Ujjain|Loni|Siliguri|Jhansi|Ulhasnagar|Jammu|Sangli|Mangaluru|Erode|Belagavi|Ambattur|Tirunelveli|Malegaon|Gaya|Udaipur|Kozhikode|Thrissur|Kollam|Davanagere|Kurnool|Rajahmundry|Bokaro|Bellary|Patiala|Agartala|Bhagalpur|Muzaffarnagar|Bhatpara|Panihati|Latur|Dhule|Tirupati|Rohtak|Korba|Bhilwara|Berhampur|Muzaffarpur|Ahmednagar|Mathura|Kakinada|Kollam|Bilaspur|Shahjahanpur|Satara|Bijapur|Rampur|Shivamogga|Chandrapur|Junagadh|Alwar|Bardhaman|Kulti|Nizamabad|Parbhani|Tumakuru|Khammam|Uzhavarkarai|Bihar Sharif|Panipat|Darbhanga|Bally|Aizawl|Dewas|Ichalkaranji|Karnal|Bathinda|Jalna|Eluru|Barasat|Purnia|Satna|Mau|Sonipat|Farrukhabad|Sagar|Durg|Imphal|Ratlam|Hapur|Arrah|Anantapur|Karimnagar|Etawah|Ambernath|North Dumdum|Bharatpur|Begusarai|Gandhidham|Baranagar|Tiruvottiyur|Puducherry|Sikar|Thoothukudi|Rewa|Mirzapur|Raichur|Pali|Ramagundam|Haridwar|Vijayanagaram|Katihar|Nagercoil|Sri Ganganagar|Karawal Nagar|Mango|Thanjavur|Bulandshahr|Uluberia|Murwara|Sambhal|Singrauli|Nadiad|Secunderabad|Naihati|Yamunanagar|Bidhannagar|Pallavaram|Bidar|Munger|Panchkula|Burhanpur|Kharagpur|Dindigul|Gandhinagar|Hospet|Nangloi Jat|Malda|Ongole|Deoghar|Chapra|Haldia|Khandwa|Nandyal|Morena|Amroha|Anand|Bhind|Bhalswa Jahangir Pur|Madhyamgram|Bhiwani|Berhampore|Ambala|Morbi|Fatehpur|Raebareli|Khora|Chittoor|Bhusawal|Orai|Bahraich|Phusro|Vellore|Mehsana|Raiganj|Sirsa|Danapur|Serampore|Sultan Pur Majra|Guna|Jaunpur|Panvel|Shivpuri|Surendranagar|Unnao|Chinsurah|Alappuzha|Kottayam|Machilipatnam|Shimla|Adoni|Udupi|Tenali|Proddatur|Saharsa|Hindupur|Sasaram|Hajipur|Bhimavaram|Kumbakonam|Dehri|Madanapalle|Siwan|Bettiah|Guntakal|Srikakulam|Motihari|Dharmavaram|Gudivada|Phagwara|Pudukkottai|Hosur|Narasaraopet|Suryapet|Miryalaguda|Tadipatri|Karaikudi|Kishanganj|Jamalpur|Ballia|Kavali|Tadepalligudem|Amaravati|Buxar|Jehanabad|Aurangabad (Bihar)|Gangtok|Itanagar|Kohima|Shillong|Port Blair|Daman|Silvassa|Kavaratti|Leh|Panaji|Margao|Vasco da Gama|Mapusa|Puri|Sambalpur|Balasore|Baripada|Jharsuguda|Hazaribagh|Giridih|Ramgarh|Medininagar|Haldwani|Rudrapur|Kashipur|Roorkee|Rishikesh|Nainital|Mussoorie|Solan|Mandi|Dharamshala|Kullu|Manali|Pathankot|Hoshiarpur|Mohali|Moga|Firozpur|Kapurthala|Zirakpur|Rewari|Hisar|Jind|Kaithal|Kurukshetra|Palwal|Bahadurgarh|Ayodhya|Mathura-Vrindavan|Gonda|Basti|Azamgarh|Sultanpur|Pratapgarh|Lakhimpur|Sitapur|Hardoi|Badaun|Pilibhit|Lalitpur|Banda|Chitrakoot|Ghazipur|Deoria|Kushinagar|Bijnor|Moradabad|Etah|Mainpuri|Kannauj|Kasganj|Hathras|Rae Bareli|Barabanki|Akbarpur|Bhadohi|Chandauli|Sonbhadra|Vidisha|Hoshangabad|Itarsi|Chhindwara|Seoni|Mandsaur|Neemuch|Shajapur|Sehore|Damoh|Chhatarpur|Tikamgarh|Datia|Betul|Harda|Balaghat|Mandla|Jagdalpur|Ambikapur|Raigarh|Rajnandgaon|Dhamtari|Mahasamund|Bhuj|Porbandar|Veraval|Navsari|Valsad|Vapi|Bharuch|Ankleshwar|Godhra|Dahod|Palanpur|Patan|Himmatnagar|Botad|Amreli|Ratnagiri|Sindhudurg|Kudal|Beed|Osmanabad|Yavatmal|Wardha|Gondia|Bhandara|Washim|Buldhana|Hingoli|Baramati|Lonavala|Karad|Hassan|Mandya|Chikkamagaluru|Chitradurga|Kolar|Karwar|Bagalkot|Gadag|Haveri|Koppal|Chamarajanagar|Madikeri|Kannur|Kasaragod|Palakkad|Malappuram|Pathanamthitta|Idukki|Wayanad|Ooty|Karur|Namakkal|Krishnagiri|Dharmapuri|Cuddalore|Villupuram|Kanchipuram|Tiruvannamalai|Nagapattinam|Ramanathapuram|Sivakasi|Virudhunagar|Theni|Rameswaram|Kanyakumari|Ariyalur|Perambalur|Mahbubnagar|Nalgonda|Adilabad|Siddipet|Mancherial|Sangareddy|Kadapa|Kurnool|Anakapalli|Bapatla|Chirala|Kalimpong|Darjeeling|Jalpaiguri|Cooch Behar|Bankura|Purulia|Midnapore|Krishnanagar|Shantiniketan|Dibrugarh|Jorhat|Silchar|Tezpur|Nagaon|Tinsukia|Bongaigaon|Dimapur|Tura|Agartala|Udaipur (Tripura)|Kargil|Anantnag|Baramulla|Sopore|Kathua|Udhampur').split('|').filter((c, i, a) => a.indexOf(c) === i).sort();
+    let PHONE_CC = '91';
+    const cityOptions = (form) => (!form || !form.country || form.country === 'India') ? INDIA_CITIES : [];
+
     // ============== Entity enums + module config ==============
     const E = {
       status:[ 'active','inactive' ], custStatus:[ 'active','suspended','disconnected' ],
-      invStatus:[ 'unpaid','partial','paid','overdue' ], payMethod:[ 'cash','bank_transfer','easypaisa','jazzcash','cheque' ],
+      invStatus:[ 'unpaid','partial','paid','overdue' ], payMethod:[ 'cash','upi','card','bank_transfer','cheque','easypaisa','jazzcash' ],
       expCat:[ 'salary','equipment','utilities','rent','bandwidth','maintenance','other' ],
       bankType:[ 'current','savings','cash','jazzcash','easypaisa','other' ], bankStatus:[ 'active','inactive','closed' ],
       priority:[ 'low','medium','high','urgent' ], compStatus:[ 'open','in_progress','resolved','closed' ],
@@ -3210,9 +3227,9 @@
         fields:[ {n:'full_name',l:'Full Name',t:'text',req:true}, {n:'phone',l:'Phone',t:'text',req:true}, {n:'email',l:'Email',t:'email'}, {n:'cnic',l:'CNIC',t:'text'}, {n:'area_id',l:'Area',t:'lk',lk:'areas',req:true}, {n:'package_id',l:'Package',t:'lk',lk:'packages',req:true}, {n:'installation_date',l:'Installation Date',t:'date',req:true}, {n:'monthly_due_day',l:'Due Day (1-28)',t:'num',def:1}, {n:'opening_balance',l:'Opening Balance (old dues)',t:'num',def:0,hint:'Arrears the customer already owed when added to the system'}, {n:'ip_address',l:'IP Address',t:'text'}, {n:'mac_address',l:'MAC Address',t:'text'}, {n:'connection_status',l:'Connection Status',t:'sel',o:E.custStatus,req:true,def:'active'}, {n:'address',l:'Address',t:'area',full:true,req:true}, {n:'notes',l:'Notes',t:'area',full:true} ] },
 
       areas: { key:'areas', page:'areas', title:'Area', icon:'fa-map-marker-alt', order:[[0,'desc']],
-        cols:[ {d:'id',t:'ID'}, {d:'name',t:'Name'}, {d:'city',t:'City'}, {d:'description',t:'Description'}, {d:'status',t:'Status',k:'badge'} ],
+        cols:[ {d:'id',t:'ID'}, {d:'name',t:'Name'}, {d:'city',t:'City'}, {d:'country',t:'Country'}, {d:'description',t:'Description'}, {d:'status',t:'Status',k:'badge'} ],
         filters:[ {n:'search',l:'Search',k:'search'}, {n:'status',l:'Status',k:'sel',o:E.status} ],
-        fields:[ {n:'name',l:'Area Name',t:'text',req:true}, {n:'city',l:'City',t:'text'}, {n:'description',l:'Description',t:'area',full:true}, {n:'status',l:'Status',t:'sel',o:E.status,req:true,def:'active'} ] },
+        fields:[ {n:'name',l:'Area Name',t:'text',req:true}, {n:'country',l:'Country',t:'combo',o:COUNTRIES,def:'India'}, {n:'city',l:'City',t:'combo',o:cityOptions,hint:'Pick from the list or type any city'}, {n:'description',l:'Description',t:'area',full:true}, {n:'status',l:'Status',t:'sel',o:E.status,req:true,def:'active'} ] },
 
       packages: { key:'packages', page:'packages', title:'Package', icon:'fa-box', order:[[0,'desc']],
         cols:[ {d:'id',t:'ID'}, {d:'name',t:'Name'}, {d:'speed_mbps',t:'Speed (Mbps)'}, {d:'price',t:'Price',k:'money'}, {d:'billing_cycle',t:'Cycle',k:'badge'}, {d:'status',t:'Status',k:'badge'} ],
@@ -3237,22 +3254,22 @@
       calls: { key:'calls', page:'calls', title:'Call Log', icon:'fa-phone', order:[[0,'desc']],
         cols:[ {d:'id',t:'ID'}, {d:'customer_id',t:'Customer',k:'lk',lk:'customers'}, {d:'called_by',t:'Called By',k:'lk',lk:'users'}, {d:'call_date',t:'Date',k:'date'}, {d:'outcome',t:'Outcome',k:'badge'}, {d:'promised_date',t:'Promised',k:'date'} ],
         filters:[ {n:'search',l:'Search',k:'search'}, {n:'outcome',l:'Outcome',k:'sel',o:E.callOutcome}, {n:'__dr',l:'Call Date',k:'daterange',field:'call_date'} ],
-        fields:[ {n:'customer_id',l:'Customer',t:'lk',lk:'customers',req:true}, {n:'invoice_id',l:'Invoice',t:'lk',lk:'invoices'}, {n:'call_date',l:'Call Date',t:'date',req:true}, {n:'outcome',l:'Outcome',t:'sel',o:E.callOutcome,req:true,def:'no_answer'}, {n:'promised_date',l:'Promised Date',t:'date'}, {n:'called_by',l:'Called By',t:'lk',lk:'users'}, {n:'notes',l:'Notes',t:'area',full:true} ] },
+        fields:[ {n:'customer_id',l:'Customer',t:'lk',lk:'customers',req:true}, {n:'invoice_id',l:'Invoice',t:'lk',lk:'invoices'}, {n:'call_date',l:'Call Date',t:'date',req:true,auto:true}, {n:'outcome',l:'Outcome',t:'sel',o:E.callOutcome,req:true,def:'no_answer'}, {n:'promised_date',l:'Promised Date',t:'date'}, {n:'called_by',l:'Called By',t:'lk',lk:'users'}, {n:'notes',l:'Notes',t:'area',full:true} ] },
 
       invoices: { key:'invoices', page:'invoices', title:'Invoice', icon:'fa-file-invoice-dollar', order:[[0,'desc']],
         cols:[ {d:'invoice_number',t:'Invoice #'}, {d:'customer_id',t:'Customer',k:'lk',lk:'customers'}, {d:'billing_month',t:'Month'}, {d:'previous_balance',t:'Previous',k:'money'}, {d:'total',t:'Invoice',k:'money'}, {d:'paid_amount',t:'Paid',k:'money'}, {d:'balance',t:'Balance',k:'bal'}, {d:'due_date',t:'Due',k:'date'}, {d:'due_date',t:'Overdue',k:'overdue'}, {d:'status',t:'Status',k:'badge'} ],
         filters:[ {n:'search',l:'Search',k:'search'}, {n:'status',l:'Status',k:'sel',o:E.invStatus}, {n:'__dr',l:'Due Date',k:'daterange',field:'due_date'} ],
-        fields:[ {n:'customer_id',l:'Customer',t:'lk',lk:'customers',req:true}, {n:'package_id',l:'Package',t:'lk',lk:'packages',req:true}, {n:'billing_month',l:'Billing Month (YYYY-MM)',t:'month',req:true}, {n:'amount',l:'Amount',t:'num',req:true}, {n:'discount',l:'Discount',t:'num',def:0}, {n:'tax',l:'Tax',t:'num',def:0}, {n:'due_date',l:'Due Date',t:'date',req:true} ] },
+        fields:[ {n:'customer_id',l:'Customer',t:'lk',lk:'customers',req:true}, {n:'package_id',l:'Package',t:'lk',lk:'packages',req:true}, {n:'billing_month',l:'Billing Month',t:'month',req:true,auto:true}, {n:'amount',l:'Amount',t:'num',req:true}, {n:'discount',l:'Discount (amount or %)',t:'text',def:'0',hint:'e.g. 200 or 10%'}, {n:'tax',l:'Tax / GST (amount or %)',t:'text',def:'0',hint:'e.g. 90 or 18% (on the net amount)'}, {n:'due_date',l:'Due Date',t:'date',req:true,auto:true} ] },
 
       payments: { key:'payments', page:'payments', title:'Payment', icon:'fa-money-bill-wave', order:[[0,'desc']], panel:'dues',
         cols:[ {d:'receipt_number',t:'Receipt #'}, {d:'slip_code',t:'Slip Code'}, {d:'customer_id',t:'Customer',k:'lk',lk:'customers'}, {d:'amount',t:'Amount',k:'money'}, {d:'payment_method',t:'Method',k:'badge'}, {d:'payment_date',t:'Date',k:'date'}, {d:'reference_number',t:'Payment ID'}, {d:'collected_by',t:'Collected By',k:'lk',lk:'users'} ],
         filters:[ {n:'search',l:'Search',k:'search'}, {n:'payment_method',l:'Method',k:'sel',o:E.payMethod}, {n:'__dr',l:'Payment Date',k:'daterange',field:'payment_date'} ],
-        fields:[ {n:'customer_id',l:'Customer',t:'lk',lk:'customers',req:true}, {n:'invoice_id',l:'Against Invoice (optional)',t:'lk',lk:'invoices',filterBy:'customer_id'}, {n:'amount',l:'Amount Received',t:'num',req:true}, {n:'payment_method',l:'Method',t:'sel',o:E.payMethod,req:true,def:'cash'}, {n:'payment_date',l:'Payment Date',t:'date',req:true}, {n:'slip_code',l:'Slip Code (unique)',t:'text',hint:'Receipt-book serial — cannot repeat'}, {n:'reference_number',l:'Payment ID / TRX Ref (unique)',t:'text',hint:'easypaisa / JazzCash / bank transaction id — cannot repeat'}, {n:'collected_by',l:'Collected By',t:'lk',lk:'users'}, {n:'notes',l:'Notes',t:'area',full:true} ] },
+        fields:[ {n:'customer_id',l:'Customer',t:'lk',lk:'customers',req:true}, {n:'invoice_id',l:'Against Invoice (optional)',t:'lk',lk:'invoices',filterBy:'customer_id'}, {n:'amount',l:'Amount Received',t:'num',req:true}, {n:'payment_method',l:'Method',t:'sel',o:E.payMethod,req:true,def:'cash'}, {n:'payment_date',l:'Payment Date',t:'date',req:true,auto:true}, {n:'slip_code',l:'Slip Code (unique)',t:'text',hint:'Receipt-book serial — cannot repeat'}, {n:'reference_number',l:'Payment ID / TRX Ref (unique)',t:'text',hint:'easypaisa / JazzCash / bank transaction id — cannot repeat'}, {n:'collected_by',l:'Collected By',t:'lk',lk:'users'}, {n:'notes',l:'Notes',t:'area',full:true} ] },
 
       expenses: { key:'expenses', page:'expenses', title:'Expense', icon:'fa-receipt', order:[[0,'desc']],
         cols:[ {d:'id',t:'ID'}, {d:'expense_date',t:'Date',k:'date'}, {d:'category',t:'Category',k:'badge'}, {d:'description',t:'Description'}, {d:'amount',t:'Amount',k:'money'}, {d:'paid_by',t:'Paid By',k:'lk',lk:'users'} ],
         filters:[ {n:'search',l:'Search',k:'search'}, {n:'category',l:'Category',k:'sel',o:E.expCat}, {n:'__dr',l:'Expense Date',k:'daterange',field:'expense_date'} ],
-        fields:[ {n:'expense_date',l:'Date',t:'date',req:true}, {n:'category',l:'Category',t:'sel',o:E.expCat,req:true,def:'other'}, {n:'description',l:'Description',t:'text',req:true}, {n:'amount',l:'Amount',t:'num',req:true}, {n:'paid_by',l:'Paid By',t:'lk',lk:'users'}, {n:'receipt_image',l:'Receipt Image URL',t:'text'}, {n:'notes',l:'Notes',t:'area',full:true} ] },
+        fields:[ {n:'expense_date',l:'Date',t:'date',req:true,auto:true}, {n:'category',l:'Category',t:'sel',o:E.expCat,req:true,def:'other'}, {n:'description',l:'Description',t:'text',req:true}, {n:'amount',l:'Amount',t:'num',req:true}, {n:'paid_by',l:'Paid By',t:'lk',lk:'users'}, {n:'receipt_image',l:'Receipt Image URL',t:'text'}, {n:'notes',l:'Notes',t:'area',full:true} ] },
 
       vendors: { key:'vendors', page:'vendors', title:'Vendor', icon:'fa-truck', order:[[0,'desc']],
         cols:[ {d:'vendor_code',t:'Code'}, {d:'vendor_name',t:'Name'}, {d:'contact_person',t:'Contact'}, {d:'phone',t:'Phone'}, {d:'current_balance',t:'Balance',k:'money'}, {d:'status',t:'Status',k:'badge'} ],
@@ -3262,12 +3279,12 @@
       banks: { key:'banks', page:'banks', title:'Bank Account', icon:'fa-university', order:[[0,'desc']],
         cols:[ {d:'account_name',t:'Account'}, {d:'bank_name',t:'Bank'}, {d:'account_number',t:'Number'}, {d:'account_type',t:'Type',k:'badge'}, {d:'current_balance',t:'Balance',k:'money'}, {d:'status',t:'Status',k:'badge'} ],
         filters:[ {n:'search',l:'Search',k:'search'}, {n:'account_type',l:'Type',k:'sel',o:E.bankType}, {n:'status',l:'Status',k:'sel',o:E.bankStatus} ],
-        fields:[ {n:'account_name',l:'Account Name',t:'text',req:true}, {n:'account_title',l:'Account Title',t:'text',req:true}, {n:'bank_name',l:'Bank Name',t:'text',req:true}, {n:'branch_name',l:'Branch',t:'text'}, {n:'account_number',l:'Account Number',t:'text',req:true}, {n:'iban',l:'IBAN',t:'text'}, {n:'account_type',l:'Type',t:'sel',o:E.bankType,req:true,def:'current'}, {n:'currency',l:'Currency',t:'text',def:'PKR'}, {n:'opening_balance',l:'Opening Balance',t:'num',def:0}, {n:'current_balance',l:'Current Balance',t:'num',def:0}, {n:'is_default',l:'Default Account?',t:'sel',o:E.yesno,def:'0'}, {n:'status',l:'Status',t:'sel',o:E.bankStatus,req:true,def:'active'}, {n:'notes',l:'Notes',t:'area',full:true} ] },
+        fields:[ {n:'account_name',l:'Account Name',t:'text',req:true}, {n:'account_title',l:'Account Title',t:'text',req:true}, {n:'bank_name',l:'Bank Name',t:'text',req:true}, {n:'branch_name',l:'Branch',t:'text'}, {n:'account_number',l:'Account Number',t:'text',req:true}, {n:'iban',l:'IBAN',t:'text'}, {n:'account_type',l:'Type',t:'sel',o:E.bankType,req:true,def:'current'}, {n:'currency',l:'Currency',t:'text',def:'INR'}, {n:'opening_balance',l:'Opening Balance',t:'num',def:0}, {n:'current_balance',l:'Current Balance',t:'num',def:0}, {n:'is_default',l:'Default Account?',t:'sel',o:E.yesno,def:'0'}, {n:'status',l:'Status',t:'sel',o:E.bankStatus,req:true,def:'active'}, {n:'notes',l:'Notes',t:'area',full:true} ] },
 
       collections: { key:'collections', page:'collections', title:'Collection Run', icon:'fa-hand-holding-usd', order:[[0,'desc']],
         cols:[ {d:'id',t:'ID'}, {d:'collector_user_id',t:'Collector',k:'lk',lk:'users'}, {d:'collection_date',t:'Date',k:'date'}, {d:'total_collected_cash',t:'Cash',k:'money'}, {d:'total_collected_online',t:'Online',k:'money'}, {d:'closing_balance',t:'Closing',k:'money'}, {d:'status',t:'Status',k:'badge'} ],
         filters:[ {n:'search',l:'Search',k:'search'}, {n:'status',l:'Status',k:'sel',o:E.collStatus}, {n:'__dr',l:'Collection Date',k:'daterange',field:'collection_date'} ],
-        fields:[ {n:'collector_user_id',l:'Collector',t:'lk',lk:'users',req:true}, {n:'collection_date',l:'Date',t:'date',req:true}, {n:'opening_balance',l:'Opening Balance',t:'num',def:0}, {n:'total_collected_cash',l:'Cash Collected',t:'num',def:0}, {n:'total_collected_online',l:'Online Collected',t:'num',def:0}, {n:'total_expenses_paid',l:'Expenses Paid',t:'num',def:0}, {n:'deposited_to_bank_amount',l:'Deposited to Bank',t:'num',def:0}, {n:'deposit_date',l:'Deposit Date',t:'date'}, {n:'deposit_reference',l:'Deposit Ref',t:'text'}, {n:'status',l:'Status',t:'sel',o:E.collStatus,req:true,def:'open'}, {n:'notes',l:'Notes',t:'area',full:true} ] },
+        fields:[ {n:'collector_user_id',l:'Collector',t:'lk',lk:'users',req:true}, {n:'collection_date',l:'Date',t:'date',req:true,auto:true}, {n:'opening_balance',l:'Opening Balance',t:'num',def:0}, {n:'total_collected_cash',l:'Cash Collected',t:'num',def:0}, {n:'total_collected_online',l:'Online Collected',t:'num',def:0}, {n:'total_expenses_paid',l:'Expenses Paid',t:'num',def:0}, {n:'deposited_to_bank_amount',l:'Deposited to Bank',t:'num',def:0}, {n:'deposit_date',l:'Deposit Date',t:'date'}, {n:'deposit_reference',l:'Deposit Ref',t:'text'}, {n:'status',l:'Status',t:'sel',o:E.collStatus,req:true,def:'open'}, {n:'notes',l:'Notes',t:'area',full:true} ] },
 
       notifications: { key:'notifications', page:'notifications', title:'Notification', icon:'fa-bell', order:[[0,'desc']],
         cols:[ {d:'id',t:'ID'}, {d:'title',t:'Title'}, {d:'message',t:'Message'}, {d:'type',t:'Type',k:'badge'}, {d:'user_id',t:'User',k:'lk',lk:'users'}, {d:'is_read',t:'Read',k:'bool'} ],
@@ -3321,7 +3338,7 @@
           {label:'Payments', icon:'fa-receipt', color:'ib-navy', calc:r=>r.length},
           {label:'Total Collected', icon:'fa-coins', color:'ib-green', calc:r=>fmtMoney(sum(r,'amount'))},
           {label:'Cash', icon:'fa-money-bill', color:'ib-teal', calc:r=>fmtMoney(r.filter(x=>x.payment_method==='cash').reduce((s,x)=>s+(Number(x.amount)||0),0)), filter:{field:'payment_method',value:'cash'}},
-          {label:'Bank/Wallet', icon:'fa-mobile-screen', color:'ib-blue', calc:r=>fmtMoney(r.filter(x=>['easypaisa','jazzcash','bank_transfer'].indexOf(x.payment_method)!==-1).reduce((s,x)=>s+(Number(x.amount)||0),0))}
+          {label:'Bank/UPI/Card', icon:'fa-mobile-screen', color:'ib-blue', calc:r=>fmtMoney(r.filter(x=>['upi','card','easypaisa','jazzcash','bank_transfer'].indexOf(x.payment_method)!==-1).reduce((s,x)=>s+(Number(x.amount)||0),0))}
         ],
         actions:[
           {k:'wa', icon:'fa-whatsapp', label:'WhatsApp Receipt', primary:true, type:'wa', phone:(r,lk)=>custPhone(lk,r.customer_id),
@@ -3451,7 +3468,7 @@
       expenses: { page:'expense_payments', childKey:'expense_payments', title:'Expense Payment', icon:'fa-money-check-dollar',
         summary:[ {d:'description',t:'Expense'}, {d:'amount',t:'Total',k:'money'}, {d:'category',t:'Category',k:'badge'} ],
         cols:[ {d:'amount',t:'Amount',k:'money'}, {d:'payment_date',t:'Date',k:'date'}, {d:'payment_method',t:'Method',k:'badge'}, {d:'reference',t:'Ref'} ],
-        fields:[ {n:'amount',l:'Amount',t:'num',req:true}, {n:'payment_date',l:'Payment Date',t:'date',req:true}, {n:'payment_method',l:'Method',t:'sel',o:E.payMethod,def:'cash'}, {n:'reference',l:'Reference',t:'text'}, {n:'notes',l:'Notes',t:'area',full:true} ] },
+        fields:[ {n:'amount',l:'Amount',t:'num',req:true}, {n:'payment_date',l:'Payment Date',t:'date',req:true,auto:true}, {n:'payment_method',l:'Method',t:'sel',o:E.payMethod,def:'cash'}, {n:'reference',l:'Reference',t:'text'}, {n:'notes',l:'Notes',t:'area',full:true} ] },
       complaints: { page:'attachments', childKey:'attachments', title:'Attachment', icon:'fa-paperclip',
         summary:[ {d:'ticket_number',t:'Ticket #'}, {d:'subject',t:'Subject'}, {d:'status',t:'Status',k:'badge'} ],
         cols:[ {d:'original_name',t:'Name'}, {d:'file_path',t:'File URL'}, {d:'uploaded_by',t:'By',k:'lk',lk:'users'}, {d:'uploaded_at',t:'When',k:'date'} ],
@@ -3722,12 +3739,13 @@
     // ============== Entity Field / Modal ==============
     function EntityField({ f, value, onChange, lookups, form }) {
       let input;
-      let opts = f.t === 'lk' ? (lookups[f.lk] || []) : f.o;
+      let opts = f.t === 'lk' ? (lookups[f.lk] || []) : (typeof f.o === 'function' ? f.o(form) : f.o);
       if (f.t === 'lk' && f.filterBy && form && form[f.filterBy]) opts = opts.filter(o => o[f.filterBy] === undefined || String(o[f.filterBy]) === String(form[f.filterBy]));
       if (f.t === 'area') input = <textarea value={value} onChange={(e) => onChange(e.target.value)} rows={3}></textarea>;
       else if (f.t === 'num') input = <input type="number" step="any" value={value} onChange={(e) => onChange(e.target.value)} />;
       else if (f.t === 'date') input = <input type="date" value={value ? String(value).slice(0,10) : ''} onChange={(e) => onChange(e.target.value)} />;
       else if (f.t === 'month') input = <input type="month" value={value ? String(value).slice(0,7) : ''} onChange={(e) => onChange(e.target.value)} />;
+      else if (f.t === 'combo') input = <SearchableDropdown options={opts || []} value={value} onChange={onChange} placeholder="— Select or type —" allowCustom />;
       else if (f.t === 'sel' || f.t === 'lk') input = <SearchableDropdown options={opts} value={value} onChange={onChange} placeholder={f.req ? undefined : '— None —'} />;
       else input = <input type={f.t === 'email' ? 'email' : 'text'} value={value} onChange={(e) => onChange(e.target.value)} />;
       return (
@@ -3739,19 +3757,60 @@
       );
     }
 
+    // ============== Invoice calculator ==============
+    const localToday = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+    const num0 = (v) => Number(v) || 0;
+    const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+    const pctOf = (v, base) => { const t = String(v == null ? '' : v).trim(); return /%$/.test(t) ? r2(base * num0(t.replace('%', '')) / 100) : r2(num0(t)); };
+    const invoiceMath = (f) => { const amount = r2(num0(f.amount)), discount = pctOf(f.discount, amount), net = r2(amount - discount), tax = pctOf(f.tax, net); return { amount, discount, net, tax, total: r2(net + tax) }; };
+    function InvoiceCalc({ form }) {
+      const m = invoiceMath(form);
+      const isPct = (v) => /%$/.test(String(v || '').trim());
+      const row = (l, v) => <div style={{ display:'flex', justifyContent:'space-between', padding:'6px 0', borderBottom:'1px dashed #e3e6eb', fontSize:14 }}><span>{l}</span><span>{fmtMoney(v)}</span></div>;
+      return (
+        <div style={{ background:'#f8f9fb', border:'1px solid #e3e6eb', borderRadius:10, padding:'10px 14px', margin:'4px 0 14px' }}>
+          <div style={{ fontSize:12, fontWeight:700, textTransform:'uppercase', letterSpacing:.5, color:'#7a8794', marginBottom:4 }}><i className="fas fa-calculator"></i> Invoice calculation</div>
+          {row('Amount', m.amount)}
+          {row('− Discount' + (isPct(form.discount) ? ' (' + String(form.discount).trim() + ')' : ''), m.discount)}
+          <div style={{ display:'flex', justifyContent:'space-between', padding:'6px 0', borderBottom:'1px dashed #e3e6eb', fontWeight:700 }}><span>Net amount</span><span>{fmtMoney(m.net)}</span></div>
+          {row('+ Tax / GST' + (isPct(form.tax) ? ' (' + String(form.tax).trim() + ')' : ''), m.tax)}
+          <div style={{ display:'flex', justifyContent:'space-between', padding:'8px 0 2px', fontWeight:800, fontSize:18, color:'var(--navy-primary)' }}><span>Total</span><span>{fmtMoney(m.total)}</span></div>
+        </div>
+      );
+    }
+
     function EntityModal({ cfg, initial, lookups, currentUser, onClose, onSave }) {
       useEsc(onClose);
       const blank = {};
-      cfg.fields.forEach(f => { blank[f.n] = (initial && initial[f.n] !== undefined && initial[f.n] !== '') ? initial[f.n] : (f.def !== undefined ? f.def : ''); });
+      const isNewRec = !(initial && initial.id);
+      cfg.fields.forEach(f => {
+        let v = (initial && initial[f.n] !== undefined && initial[f.n] !== '') ? initial[f.n] : (f.def !== undefined ? f.def : '');
+        if (isNewRec && f.auto && (v === '' || v == null)) v = f.t === 'month' ? localToday().slice(0, 7) : localToday();
+        blank[f.n] = v;
+      });
+      const isInv = cfg.key === 'invoices';
+      const pkPrice = (id) => { const pk = ((lookups && lookups.packages) || []).find(o => String(o.id) === String(id)); return pk ? pk.price : null; };
+      const custPkg = (id) => { const c = ((lookups && lookups.customers) || []).find(o => String(o.id) === String(id)); return c ? c.package_id : ''; };
+      if (isInv && isNewRec && blank.customer_id && !blank.package_id) blank.package_id = custPkg(blank.customer_id) || '';
+      if (isInv && isNewRec && blank.package_id && !num0(blank.amount) && pkPrice(blank.package_id) != null) blank.amount = pkPrice(blank.package_id);
       const [form, setForm] = useState(blank);
       const [saving, setSaving] = useState(false);
-      const set = (n, v) => setForm(prev => ({ ...prev, [n]: v }));
+      const set = (n, v) => setForm(prev => {
+        const next = { ...prev, [n]: v };
+        if (isInv) {   // customer → their plan, plan → its price (only if amount not typed by hand)
+          if (n === 'customer_id' && !prev.package_id) { const pid = custPkg(v); if (pid) { next.package_id = pid; if (!num0(prev.amount) && pkPrice(pid) != null) next.amount = pkPrice(pid); } }
+          if (n === 'package_id') { const pr = pkPrice(v), old = pkPrice(prev.package_id); if (pr != null && (!num0(prev.amount) || num0(prev.amount) === num0(old))) next.amount = pr; }
+        }
+        return next;
+      });
       const submit = (e) => {
         e.preventDefault();
         const missing = cfg.fields.filter(f => f.req && (form[f.n] === '' || form[f.n] == null));
         if (missing.length) { Swal.fire({ icon:'warning', title:'Required fields', text:'Please fill: ' + missing.map(m => m.l).join(', ') }); return; }
         setSaving(true);
-        Promise.resolve(onSave(form)).finally(() => setSaving(false));
+        let out = form;
+        if (isInv) { const m = invoiceMath(form); out = { ...form, amount: m.amount, discount: m.discount, tax: m.tax }; }
+        Promise.resolve(onSave(out)).finally(() => setSaving(false));
       };
       return (
         <div className="modal-overlay" onClick={onClose}>
@@ -3769,6 +3828,7 @@
                 <div className="form-grid">
                   {cfg.fields.map(f => <EntityField key={f.n} f={f} form={form} value={form[f.n]} onChange={(v) => set(f.n, v)} lookups={lookups} />)}
                 </div>
+                {isInv && <InvoiceCalc form={form} />}
                 <div className="form-actions">
                   <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? <><i className="fas fa-spinner fa-spin"></i> Saving...</> : <><i className="fas fa-save"></i> Save</>}</button>
                   <button type="button" className="btn btn-secondary" onClick={onClose}><i className="fas fa-times"></i> Cancel</button>
@@ -3876,9 +3936,10 @@
       }, [filters]);
 
       const clearFilters = () => { setFilters({}); delete _dateFilters[tableId]; if (tRef.current) { tRef.current.search('').columns().search('').draw(); } };
-      const refresh = () => {
-        const p = mutate(); swrMutate('dash:stats'); swrMutate('lookups');
-        if (['payments','invoices','customers'].indexOf(cfg.key) !== -1) mutateLedger();
+      const refresh = (money) => {
+        const p = mutate(); swrRefresh('dash:stats');
+        if (['customers','areas','packages','invoices','vendors','banks'].indexOf(cfg.key) !== -1) swrRefresh('lookups');
+        if (money !== false && ['payments','invoices'].indexOf(cfg.key) !== -1) mutateLedger();
         return p;
       };
 
@@ -3887,8 +3948,9 @@
         return p.then(r => {
           if (r && r.success) {
             setShowModal(false); setEditing(null);
-            Swal.fire({ icon:'success', title:'Success!', text:r.message, timer:1500, showConfirmButton:false });
+            toastOk(r.message);
             refresh();
+            if (cfg.key === 'customers') mutateLedger();
           } else Swal.fire({ icon:r && r.duplicate ? 'warning' : 'error', title:r && r.duplicate ? 'Duplicate not allowed' : 'Error', text:(r && r.message) || 'Failed' });
         }).catch(err => Swal.fire({ icon:'error', title:'Error', text:err.message }));
       };
@@ -3914,10 +3976,14 @@
         if (a.type === 'form') { setQuickForm({ module: a.module, initial: a.prefill ? a.prefill(row, lk) : {} }); return; }
         if (a.type === 'print') { printDoc(a.doc, row, lk); return; }
         if (a.type === 'set') {
-          const apply = () => gsRun('tblUpdate', currentUser, cfg.key, row.id, { [a.field]: a.value }).then(r => {
-            if (r && r.success) { Swal.fire({ icon:'success', text:a.toast || 'Updated', timer:1200, showConfirmButton:false }); refresh(); }
-            else Swal.fire({ icon:'error', title:'Error', text:(r && r.message) || 'Failed' });
-          }).catch(err => Swal.fire({ icon:'error', title:'Error', text:err.message }));
+          const apply = () => {
+            mutate(d => (d && d.data) ? { ...d, data: d.data.map(x => String(x.id) === String(row.id) ? { ...x, [a.field]: a.value } : x) } : d, false);
+            toastOk(a.toast || 'Updated');
+            return gsRun('tblUpdate', currentUser, cfg.key, row.id, { [a.field]: a.value }).then(r => {
+              if (r && r.success) refresh(false);
+              else { mutate(); Swal.fire({ icon:'error', title:'Not saved', text:(r && r.message) || 'Failed' }); }
+            }).catch(err => { mutate(); Swal.fire({ icon:'error', title:'Not saved', text:err.message }); });
+          };
           a.confirm ? Swal.fire({ icon:'question', title:a.confirm, showCancelButton:true, confirmButtonText:'Yes' }).then(res => { if (res.isConfirmed) apply(); }) : apply();
           return;
         }
@@ -4624,7 +4690,7 @@
       useEffect(() => {
         const s = readSession();
         if (s && s.token && (Date.now() - s.loginTime) < SESSION_DURATION) {
-          applyProfile(s.businessType, s.companyName);
+          applyProfile(s.businessType, s.companyName, s.phoneCode);
           swrHydrate(cacheNs(s));
           swrPrefetch(s.username, s.permissions);
           setSess(s);
@@ -4644,14 +4710,14 @@
 
       const handleLogin = (r) => {
         const s = {
-          token: r.token, companyId: r.companyId, companyName: r.companyName, daysLeft: r.daysLeft, businessType: r.businessType || 'isp',
+          token: r.token, companyId: r.companyId, companyName: r.companyName, daysLeft: r.daysLeft, businessType: r.businessType || 'isp', phoneCode: r.phoneCode || '91',
           username: r.username, role: r.role, email: r.email,
           profileImage: r.profileImage || '', themeMode: r.themeMode || 'light', customColors: r.customColors || '',
           permissions: r.permissions || null, canEditRbac: !!r.canEditRbac, loginTime: Date.now()
         };
         try { localStorage.setItem('userSession', JSON.stringify(s)); } catch (e) {}
         window.__memSession = s;
-        if (!applyProfile(s.businessType, s.companyName)) { window.location.reload(); return; }
+        if (!applyProfile(s.businessType, s.companyName, s.phoneCode)) { window.location.reload(); return; }
         swrHydrate(cacheNs(s));
         swrPrefetch(s.username, s.permissions);
         setSess(s);
