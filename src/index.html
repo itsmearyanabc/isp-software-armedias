@@ -1528,6 +1528,19 @@
     .abar.mid i { background:linear-gradient(90deg,#c77800,#fbbc04); }
     body.dark-mode .abar { background:rgba(255,255,255,0.1); }
 
+    .bill-row { display:grid; grid-template-columns:minmax(0,2.4fr) 72px 110px 110px 38px; gap:8px; align-items:center; padding:8px 0; border-bottom:1px dashed #e6dcc0; }
+    .bill-row.head { font-size:12px; color:#7a8794; font-weight:700; text-transform:uppercase; letter-spacing:.4px; padding-top:0; }
+    .bill-row input { width:100%; padding:9px 10px; border:1px solid #d0d0d0; border-radius:8px; }
+    .bill-row .amt { text-align:right; font-weight:700; }
+    .bill-row .lbl { display:none; font-size:11px; color:#7a8794; font-weight:700; text-transform:uppercase; }
+    @media (max-width:640px) {
+      .bill-row { grid-template-columns:1fr 1fr; }
+      .bill-row.head { display:none; }
+      .bill-row .pcol { grid-column:1 / -1; }
+      .bill-row .lbl { display:block; }
+    }
+    .hdr-bill-btn { background:var(--navy-accent); color:var(--on-accent,#222); border:none; border-radius:8px; padding:8px 12px; font-weight:700; font-size:13px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+    .hdr-bill-btn.on { background:#fff; color:var(--navy-primary); }
     .per-switch { display:inline-flex; border:2px solid var(--navy-primary); overflow:hidden; }
     .per-switch button { border:none; background:#fff; color:var(--navy-primary); padding:8px 18px; font-size:13px; font-weight:700; cursor:pointer; }
     .per-switch button.on { background:var(--navy-primary); color:#fff; }
@@ -3815,24 +3828,19 @@
         upd(i, p ? { product_id:String(p.id), name:p.name, price:p.price } : { product_id:'', name:String(v || '') });
       };
       const m = billMath(bill);
-      const cell = { padding:'4px 6px', verticalAlign:'middle' };
       return (
         <div style={{ border:'2px solid var(--navy-accent)', borderRadius:10, padding:12, marginBottom:16, background:'#fffdf6' }}>
           <div style={{ fontWeight:700, marginBottom:8, color:'var(--navy-primary)' }}><i className="fas fa-receipt"></i> Bill items <span style={{ fontWeight:400, fontSize:12, color:'#888' }}>— pick a {P.package.toLowerCase()} or type a new one</span></div>
-          <div style={{ overflowX:'auto' }}>
-            <table style={{ width:'100%', borderCollapse:'collapse', minWidth:520 }}>
-              <thead><tr style={{ fontSize:12, color:'#666', textAlign:'left' }}><th style={cell}>{P.package}</th><th style={{ ...cell, width:80 }}>Qty</th><th style={{ ...cell, width:120 }}>Price</th><th style={{ ...cell, width:110, textAlign:'right' }}>Amount</th><th style={{ ...cell, width:40 }}></th></tr></thead>
-              <tbody>{bill.items.map((it, i) => (
-                <tr key={i}>
-                  <td style={cell}><SearchableDropdown options={prods} value={it.product_id || it.name} onChange={(v) => pick(i, v)} placeholder={'— Select or type —'} allowCustom /></td>
-                  <td style={cell}><input type="number" min="0" step="any" value={it.qty} onChange={(e) => upd(i, { qty:e.target.value })} style={{ width:'100%', padding:8, border:'1px solid #d0d0d0', borderRadius:8 }} /></td>
-                  <td style={cell}><input type="number" min="0" step="any" value={it.price} onChange={(e) => upd(i, { price:e.target.value })} style={{ width:'100%', padding:8, border:'1px solid #d0d0d0', borderRadius:8 }} /></td>
-                  <td style={{ ...cell, textAlign:'right', fontWeight:600 }}>{fmtMoney(num0(it.qty) * num0(it.price))}</td>
-                  <td style={cell}>{bill.items.length > 1 && <button type="button" className="action-icon delete-icon" onClick={() => setBill(b => ({ ...b, items: b.items.filter((x, j) => j !== i) }))}><i className="fas fa-xmark"></i></button>}</td>
-                </tr>
-              ))}</tbody>
-            </table>
-          </div>
+          <div className="bill-row head"><span>{P.package}</span><span>Qty</span><span>Price</span><span style={{ textAlign:'right' }}>Amount</span><span></span></div>
+          {bill.items.map((it, i) => (
+            <div className="bill-row" key={i}>
+              <div className="pcol"><span className="lbl">{P.package} {i + 1}</span><SearchableDropdown options={prods} value={it.product_id || it.name} onChange={(v) => pick(i, v)} placeholder="— Select or type —" allowCustom /></div>
+              <div><span className="lbl">Qty</span><input type="number" min="0" step="any" value={it.qty} onChange={(e) => upd(i, { qty:e.target.value })} /></div>
+              <div><span className="lbl">Price</span><input type="number" min="0" step="any" value={it.price} onChange={(e) => upd(i, { price:e.target.value })} /></div>
+              <div className="amt"><span className="lbl">Amount</span>{fmtMoney(num0(it.qty) * num0(it.price))}</div>
+              <div>{bill.items.length > 1 && <button type="button" className="action-icon delete-icon" title="Remove item" onClick={() => setBill(b => ({ ...b, items: b.items.filter((x, j) => j !== i) }))}><i className="fas fa-xmark"></i></button>}</div>
+            </div>
+          ))}
           <button type="button" className="btn btn-secondary btn-sm" style={{ margin:'6px 0 10px' }} onClick={() => setBill(b => ({ ...b, items: [...b.items, { product_id:'', name:'', qty:1, price:'' }] }))}><i className="fas fa-plus"></i> Add item</button>
           <div className="form-grid">
             <div className="form-group" style={{ marginBottom:8 }}><label>Discount (amount or %)</label><input value={bill.discount} onChange={(e) => setBill(b => ({ ...b, discount:e.target.value }))} placeholder="e.g. 100 or 10%" /></div>
@@ -3911,7 +3919,11 @@
           <div className={`modal ${cfg.panel === 'dues' ? 'modal-wide' : ''}`} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3><i className={`fas ${cfg.icon}`}></i> {(initial && initial.id) ? 'Edit' : 'Add'} {cfg.title}</h3>
-              <button className="close-btn" onClick={onClose}><i className="fas fa-times"></i></button>
+              <span style={{ display:'flex', alignItems:'center', gap:8 }}>
+                {canBill && <button type="button" className={`hdr-bill-btn ${bill.on ? 'on' : ''}`} onClick={() => setBill(b => ({ ...b, on:!b.on }))} title="Make a bill with products, quantity, discount and GST">
+                  <i className={`fas ${bill.on ? 'fa-xmark' : 'fa-cash-register'}`}></i> {bill.on ? 'Remove bill' : 'Create bill'}</button>}
+                <button className="close-btn" onClick={onClose}><i className="fas fa-times"></i></button>
+              </span>
             </div>
             <div className="modal-body">
               {cfg.panel === 'dues' && currentUser && (
@@ -3919,19 +3931,13 @@
                   onPick={(iv) => setForm(prev => ({ ...prev, invoice_id: iv.id || '', amount: iv.balance }))} />
               )}
               <form onSubmit={submit}>
-                {canBill && (
-                  <label style={{ display:'flex', alignItems:'center', gap:10, margin:'0 0 12px', padding:'10px 12px', background:'#f6f8fc', borderRadius:10, cursor:'pointer', fontSize:14 }}>
-                    <input type="checkbox" checked={bill.on} onChange={(e) => setBill(b => ({ ...b, on:e.target.checked }))} style={{ width:18, height:18 }} />
-                    <span><b><i className="fas fa-cash-register"></i> Create a bill with items</b> — products, quantity, discount & GST; saves the bill + this payment together</span>
-                  </label>
-                )}
                 {canBill && bill.on && <BillBuilder bill={bill} setBill={setBill} lookups={lookups} />}
                 <div className="form-grid">
                   {cfg.fields.filter(f => !(canBill && bill.on && f.n === 'invoice_id')).map(f => <EntityField key={f.n} f={f} form={form} value={form[f.n]} onChange={(v) => { if (f.n === 'amount') setAmtTouched(true); set(f.n, v); }} lookups={lookups} />)}
                 </div>
                 {isInv && <InvoiceCalc form={form} />}
                 <div className="form-actions">
-                  <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? <><i className="fas fa-spinner fa-spin"></i> Saving...</> : <><i className="fas fa-save"></i> Save</>}</button>
+                  <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? <><i className="fas fa-spinner fa-spin"></i> Saving...</> : (canBill && bill.on ? <><i className="fas fa-receipt"></i> Save bill & payment</> : <><i className="fas fa-save"></i> Save</>)}</button>
                   <button type="button" className="btn btn-secondary" onClick={onClose}><i className="fas fa-times"></i> Cancel</button>
                 </div>
               </form>
