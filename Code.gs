@@ -493,6 +493,8 @@ function ensureRbac_(ss) {
 
 function readRoles_() {
   if (CTX && CTX.roles) return CTX.roles;
+  var ck = CTX && CTX.tid ? 'RO:' + CTX.tid : null, cache = CacheService.getScriptCache();
+  if (ck) { var hit = cache.get(ck); if (hit) { try { CTX.roles = JSON.parse(hit); return CTX.roles; } catch (e) {} } }   // permissions cached 5 min
   var data = ensureRbac_().getDataRange().getValues(), out = [];
   for (var i = 1; i < data.length; i++) {
     var r = data[i]; if (!r[ROLE_C.KEY]) continue;
@@ -502,6 +504,7 @@ function readRoles_() {
   }
   out.sort(function(a,b){ return a.sort - b.sort; });
   if (CTX) CTX.roles = out;
+  if (ck) { try { cache.put(ck, JSON.stringify(out), 300); } catch (e) {} }
   return out;
 }
 function roleByKey_(key){ var a = readRoles_(); for (var i=0;i<a.length;i++) if (a[i].key===key) return a[i]; return null; }
@@ -552,6 +555,7 @@ function toggleRbac(roleKey, pageKey, perm, value, callerUser) {
     if (perm === 'v' && !value) { p[pageKey].a = 0; p[pageKey].e = 0; p[pageKey].d = 0; }
     if (perm !== 'v' && value) p[pageKey].v = 1;
     sh.getRange(i + 1, ROLE_C.PERMS + 1).setValue(JSON.stringify(p));
+    CacheService.getScriptCache().remove('RO:' + CTX.tid);   // changes apply immediately
     addLog(callerUser, 'Permissions Updated', roleKey + ' · ' + pageKey + ' · ' + perm + '=' + (value ? 1 : 0));
     return { success:true, message:'Saved' };
   }

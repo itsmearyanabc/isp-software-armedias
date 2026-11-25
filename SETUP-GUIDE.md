@@ -207,3 +207,17 @@ In the Apps Script editor, choose **`resetMasterPassword`** and click **Run**. Y
 - Password-reset OTP emails are sent from your Gmail, up to about 100 per day on a free account.
 - Don't rename or delete sheets inside a client's spreadsheet by hand.
 - Never share the `?master` link or your master password with clients.
+
+## Editing the app code (build step)
+
+The app pages are edited in `src/index.html` and `src/master.html` (React/JSX).
+Before deploying, they are pre-compiled into the root `index.html` / `master.html` so browsers don't
+have to download a 3 MB compiler on every visit (much faster loading). Never edit the root HTML files by hand.
+
+```
+./build.sh
+export PATH=$HOME/.local/node/bin:$PATH
+clasp push --force
+clasp deploy -i AKfycbyaMbrRbhLf7HZ_nQfo0UGQWSo7_oNPnX1hcIwnEY6YmC2hnfEdHvI_K-TnbJJDNZWTWQ --description "update"
+git add -A && git commit -m "update" && git push
+```
