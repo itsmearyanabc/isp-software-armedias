@@ -3007,7 +3007,7 @@
       return 'https://wa.me/' + d + (msg ? '?text=' + encodeURIComponent(msg) : '');
     };
     const faPrefix = (icon) => (icon === 'fa-whatsapp' || icon === 'fa-facebook' || icon === 'fa-instagram') ? 'fab' : 'fas';
-    const AI_CLS = { 'fa-whatsapp':'ai-wa', 'fa-phone':'ai-call', 'fa-phone-volume':'ai-call', 'fa-money-bill-wave':'ai-pay', 'fa-file-invoice-dollar':'ai-pay', 'fa-hand-holding-dollar':'ai-pay', 'fa-coins':'ai-pay', 'fa-bolt':'ai-warn', 'fa-power-off':'ai-danger', 'fa-ban':'ai-danger', 'fa-print':'ai-info', 'fa-eye':'detail-icon', 'fa-paper-plane':'ai-wa', 'fa-envelope':'ai-call' };
+    const AI_CLS = { 'fa-whatsapp':'ai-wa', 'fa-phone':'ai-call', 'fa-phone-volume':'ai-call', 'fa-money-bill-wave':'ai-pay', 'fa-file-invoice-dollar':'ai-pay', 'fa-hand-holding-dollar':'ai-pay', 'fa-coins':'ai-pay', 'fa-bolt':'ai-warn', 'fa-power-off':'ai-danger', 'fa-ban':'ai-danger', 'fa-print':'ai-info', 'fa-eye':'detail-icon', 'fa-paper-plane':'ai-wa', 'fa-envelope':'ai-call', 'fa-file-pdf':'ai-danger' };
     const custPhone = (lk, id) => { const c = ((lk && lk.customers) || []).find(o => String(o.id) === String(id)); return c ? (c.phone || '') : ''; };
     const custName  = (lk, id) => { const c = ((lk && lk.customers) || []).find(o => String(o.id) === String(id)); return c ? (c.name || c.label || 'Customer') : 'Customer'; };
 
@@ -3231,7 +3231,31 @@
     let PHONE_CC = '91';
     let WA = { enabled:false, auto:false };
     let CUR_PERMS = null, LK = null;
-    // payment receipt → WhatsApp: PDF via official API if connected, otherwise a clear message + private PDF link
+    // ===== PDF on the click: built in memory on the server, never stored =====
+    const b64ToFile = (b64, name) => { const bin = atob(b64), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return new File([u], name, { type:'application/pdf' }); };
+    const savePdf = (file) => { const url = URL.createObjectURL(file), a = document.createElement('a'); a.href = url; a.download = file.name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000); };
+    // phones: share sheet with the PDF attached (pick WhatsApp) · computers: download the PDF + open WhatsApp with the message
+    const sharePdfWA = async (file, phone, msg) => {
+      try { if (navigator.canShare && navigator.canShare({ files:[file] })) { await navigator.share({ files:[file], text:msg }); return; } }
+      catch (e) { if (e && e.name === 'AbortError') return; }
+      savePdf(file);
+      window.open(waLink(phone, msg), '_blank');
+      Swal.fire({ toast:true, position:'top-end', icon:'info', title:'PDF downloaded — attach it in the WhatsApp chat', showConfirmButton:false, timer:5000 });
+    };
+    // kind: 'receipt' | 'invoice' · makeMsg(meta) builds the WhatsApp text from the server's details
+    const pdfToWhatsApp = (kind, id, phone, who, makeMsg, currentUser) => {
+      Swal.fire({ title:'Preparing PDF…', allowOutsideClick:false, didOpen:() => Swal.showLoading() });
+      gsRun('pdfFile', currentUser, kind, id).then(x => {
+        if (!x || !x.success) return Swal.fire({ icon:'error', title:'Error', text:(x && x.message) || 'Failed' });
+        const file = b64ToFile(x.b64, x.name), msg = makeMsg(x);
+        Swal.fire({ icon:'success', title:(kind === 'receipt' ? 'Receipt' : 'Bill') + ' PDF ready', html:'Send <b>' + esc(x.name) + '</b> to <b>' + esc(who) + '</b>.<br><span style="font-size:13px;color:#777">Nothing is saved to any storage — the PDF is made just now.</span>',
+            showCancelButton:true, showDenyButton:true, confirmButtonText:'<i class="fab fa-whatsapp"></i> Send on WhatsApp', confirmButtonColor:'#1e7e34',
+            denyButtonText:'<i class="fas fa-download"></i> Download PDF', denyButtonColor:'#3455b0', cancelButtonText:'Close' })
+          .then(res => { if (res.isConfirmed) sharePdfWA(file, phone, msg); else if (res.isDenied) savePdf(file); });
+      }).catch(err => Swal.fire({ icon:'error', title:'Error', text:err.message }));
+    };
+
+    // payment receipt → WhatsApp: PDF via official API if connected, otherwise share/download the PDF made on the click
     const sendReceiptWA = (row, currentUser, lk) => {
       const phone = custPhone(lk, row.customer_id), name = custName(lk, row.customer_id);
       if (!telDigits(phone)) { Swal.fire({ icon:'info', title:'No phone number', text:'This customer has no phone number on file.' }); return; }
@@ -3242,19 +3266,13 @@
             gsRun('sendReceiptWhatsApp', currentUser, row.id).then(x => Swal.fire({ icon:(x && x.success) ? 'success' : 'warning', title:(x && x.success) ? 'Sent' : 'Not sent', text:(x && x.message) || 'Failed', timer:(x && x.success) ? 2200 : undefined, showConfirmButton:!(x && x.success) })); });
         return;
       }
-      Swal.fire({ title:'Preparing PDF receipt…', allowOutsideClick:false, didOpen:() => Swal.showLoading() });
-      gsRun('receiptLink', currentUser, row.id).then(x => {
-        if (!x || !x.success) return Swal.fire({ icon:'error', title:'Error', text:(x && x.message) || 'Failed' });
+      pdfToWhatsApp('receipt', row.id, phone, name, (x) => {
         const bal = Number(x.balance) || 0, d = String(row.payment_date || '').slice(0, 10);
-        const msg = [`Dear ${name},`, `Thank you! We have received your payment.`, ``,
+        return [`Dear ${name},`, `Thank you! We have received your payment.`, ``,
           `Receipt: ${row.receipt_number}`, d ? `Date: ${d}` : '', `Amount: ${fmtMoney(row.amount)} (${String(row.payment_method || '').replace(/_/g, ' ')})`,
           x.invoice_number ? `Against bill: ${x.invoice_number}` : '', bal > 0.009 ? `Balance remaining: ${fmtMoney(bal)}` : `Your account is now clear.`, ``,
-          `Download your receipt (PDF): ${x.url}`, ``, `— ${P.company || ''}`].filter((l, i, a) => l !== '' || (a[i - 1] !== '' && i > 0)).join('\n');
-        Swal.fire({ icon:'success', title:'Receipt ready', html:'Opens WhatsApp with the receipt details and a private PDF link for <b>' + esc(name) + '</b>.', showCancelButton:true,
-            confirmButtonText:'<i class="fab fa-whatsapp"></i> Open WhatsApp', confirmButtonColor:'#1e7e34', cancelButtonText:'Close',
-            footer:'<a href="' + esc(x.url) + '" target="_blank" rel="noopener">View PDF receipt</a>' })
-          .then(res => { if (res.isConfirmed) window.open(waLink(phone, msg), '_blank'); });
-      }).catch(err => Swal.fire({ icon:'error', title:'Error', text:err.message }));
+          `Your receipt (PDF) is attached.`, `— ${P.company || ''}`].filter(l => l !== null).filter((l, i, a) => !(l === '' && (i === 0 || a[i - 1] === ''))).join('\n');
+      }, currentUser);
     };   // official WhatsApp API status for this company (from lookups)
     // after a NEW invoice is saved: ASK whether to send the bill on WhatsApp (sends without asking only if the company ticked auto-send).
     // Returns true when it showed its own popup (so the caller skips its "Saved" toast).
@@ -3284,7 +3302,9 @@
           if (!res.isConfirmed) return;
           if (WA.enabled) return viaApi();
           if (!telDigits(phone)) return Swal.fire({ icon:'info', title:'No phone number', text:'This customer has no phone number on file.' });
-          window.open(waLink(phone, `Dear ${custName(lk, f.customer_id)}, your bill ${invNo} for ${fmtMoney(total)} (due ${String(f.due_date || '').slice(0, 10)}) is ready. Thank you for your business — ${P.company || ''}`), '_blank');
+          pdfToWhatsApp('invoice', invId, phone, custName(lk, f.customer_id), (x) => [`Dear ${custName(lk, f.customer_id)},`, ``,
+            `Your bill ${x.invoice_number} for ${fmtMoney(x.total)} is ready${x.due_date ? ' (due ' + x.due_date + ')' : ''}.`, `The bill (PDF) is attached.`, ``,
+            `Thank you for your business — ${P.company || ''}`].join('\n'), currentUser);
         });
       return true;
     };
@@ -3418,6 +3438,7 @@
           {k:'remind', icon:'fa-whatsapp', label:'Send Reminder', type:'wa', phone:(r,lk)=>custPhone(lk,r.customer_id), msg:(r,lk)=>`Dear ${custName(lk,r.customer_id)}, invoice ${r.invoice_number} (${r.billing_month}) — previous balance ${fmtMoney(r.previous_balance)}, this month ${fmtMoney(r.total)}, payable now ${fmtMoney(r.balance)}, due ${String(r.due_date||'').slice(0,10)}. Kindly clear it ${P.dun}. Thank you.`, when:r=>(Number(r.balance)||0)>0.009},
           {k:'wasend', icon:'fa-paper-plane', label:'Send bill on WhatsApp (API)', type:'fn', fn:'sendInvoiceWhatsApp', args:r=>[r.id], when:()=>WA.enabled, confirm:'Send this bill to the customer on WhatsApp?', confirmText:'A PDF bill is sent through your WhatsApp Business number.', gate:{page:'invoices',perm:'v'}},
           {k:'mailbill', icon:'fa-envelope', label:'Email bill (PDF)', type:'fn', fn:'sendInvoiceEmail', args:r=>[r.id], when:r=>!!((((LK && LK.customers) || []).find(o => String(o.id) === String(r.customer_id)) || {}).email), confirm:'Email this bill to the customer?', gate:{page:'invoices',perm:'v'}},
+          {k:'pdfbill', icon:'fa-file-pdf', label:'Bill PDF — download / send on WhatsApp', type:'billpdf'},
           {k:'print', icon:'fa-print', label:'Print Invoice', type:'print', doc:'invoice'}
         ]
       },
@@ -4118,6 +4139,7 @@
         if (a.type === 'form') { setQuickForm({ module: a.module, initial: a.prefill ? a.prefill(row, lk) : {} }); return; }
         if (a.type === 'print') { printDoc(a.doc, row, lk); return; }
         if (a.type === 'receipt') { sendReceiptWA(row, currentUser, lk); return; }
+        if (a.type === 'billpdf') { const nm = custName(lk, row.customer_id); pdfToWhatsApp('invoice', row.id, custPhone(lk, row.customer_id), nm, (x) => [`Dear ${nm},`, ``, `Your bill ${x.invoice_number} for ${fmtMoney(x.total)} is ready${x.due_date ? ' (due ' + x.due_date + ')' : ''}.`, `The bill (PDF) is attached.`, ``, `Thank you for your business — ${P.company || ''}`].join('\n'), currentUser); return; }
         if (a.type === 'set') {
           const apply = () => {
             mutate(d => (d && d.data) ? { ...d, data: d.data.map(x => String(x.id) === String(row.id) ? { ...x, [a.field]: a.value } : x) } : d, false);

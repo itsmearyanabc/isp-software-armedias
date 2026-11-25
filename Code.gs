@@ -149,7 +149,7 @@ var API_CALLER = {
   getCustomer360:0, getUserActivity:0, resetUserPassword:0, getSettings:0, saveSettings:0,
   childRead:0, childInsert:0, childDelete:0,
   listApiKeys:0, createApiKey:0, revokeApiKey:0,
-  getWhatsAppConfig:0, saveWhatsAppConfig:0, testWhatsApp:0, sendInvoiceWhatsApp:0, sendInvoiceEmail:0, sendReceiptWhatsApp:0, receiptLink:0
+  getWhatsAppConfig:0, saveWhatsAppConfig:0, testWhatsApp:0, sendInvoiceWhatsApp:0, sendInvoiceEmail:0, sendReceiptWhatsApp:0, pdfFile:0
 };
 
 function api(token, fn, args) {
@@ -1563,22 +1563,23 @@ function sendReceiptWhatsApp(caller, paymentId) {
   }
 }
 
-// no API: create (once) a private, unguessable download link to the PDF receipt for a normal WhatsApp message
-function receiptLink(caller, paymentId) {
-  if (!gate_(caller, 'payments', 'v')) return { success:false, message:'Access denied' };
-  var r = receiptData_(paymentId); if (!r) return { success:false, message:'Payment not found' };
-  // re-use the same PDF if it was shared before (found by name — no per-receipt settings stored, so no storage limit)
-  var folders = DriveApp.getFoldersByName('AR Medias CRM — Shared receipts');
-  var folder = folders.hasNext() ? folders.next() : DriveApp.createFolder('AR Medias CRM — Shared receipts');
-  var fname = CTX.tid + '_' + r.pay.id + '_' + (r.pay.receipt_number || 'receipt') + '.pdf', it = folder.getFilesByName(fname), file = null;
-  while (it.hasNext()) { var f = it.next(); if (!f.isTrashed()) { file = f; break; } }
-  if (!file) {
-    file = folder.createFile(receiptPdf_(r)).setName(fname);
-    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-    addLog(caller, 'Receipt Link Created', r.pay.receipt_number);
+// PDF built in memory and returned to the browser (download / share) — nothing is stored in Drive
+function pdfFile(caller, kind, id) {
+  if (kind === 'receipt') {
+    if (!gate_(caller, 'payments', 'v')) return { success:false, message:'Access denied' };
+    var r = receiptData_(id); if (!r) return { success:false, message:'Payment not found' };
+    var pdf = receiptPdf_(r);
+    return { success:true, name:pdf.getName(), b64:Utilities.base64Encode(pdf.getBytes()),
+             balance:round2(num(r.cust.current_balance)), invoice_number: r.inv ? r.inv.invoice_number : '' };
   }
-  return { success:true, url:'https://drive.google.com/file/d/' + file.getId() + '/view', balance:round2(num(r.cust.current_balance)),
-           invoice_number: r.inv ? r.inv.invoice_number : '' };
+  if (kind === 'invoice') {
+    if (!gate_(caller, 'invoices', 'v')) return { success:false, message:'Access denied' };
+    var inv = readObjs_('Invoices').filter(function(x){ return String(x.id) === String(id); })[0];
+    if (!inv) return { success:false, message:'Invoice not found' };
+    var ipdf = invoicePdf_(inv, custById_(inv.customer_id) || {}, settingsMap_());
+    return { success:true, name:ipdf.getName(), b64:Utilities.base64Encode(ipdf.getBytes()), invoice_number:inv.invoice_number, total:round2(num(inv.total)), due_date:ymd_(inv.due_date) };
+  }
+  return { success:false, message:'Unknown document' };
 }
 
 function sendInvoiceWhatsApp(caller, invoiceId) {
