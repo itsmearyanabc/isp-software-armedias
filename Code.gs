@@ -146,7 +146,8 @@ var API_CALLER = {
   getLookups:0, getCustomerDues:0, convertLead:0, generateMonthlyInvoices:0, getRecovery:0,
   getAreaBalances:0, getArrearsReport:0, getPeriodReport:0, getActionCenter:0, getPendingCounts:0,
   getCustomer360:0, getUserActivity:0, resetUserPassword:0, getSettings:0, saveSettings:0,
-  childRead:0, childInsert:0, childDelete:0
+  childRead:0, childInsert:0, childDelete:0,
+  listApiKeys:0, createApiKey:0, revokeApiKey:0
 };
 
 function api(token, fn, args) {
@@ -1247,6 +1248,114 @@ function childDelete(caller, key, id){
     }
   }
   return { success:false, message:'Record not found' };
+}
+
+// ============== Public API for integrations (API keys) ==============
+// POST <web app url>  body: {"api_key":"amk_…","action":"leads.create","data":{…}}
+// A key belongs to ONE company and acts with the permissions of the user who created it.
+// Only a SHA-256 hash of each key is stored (Script Properties 'AK:<hash>').
+var API_ACTIONS = {
+  'ping': null,
+  'leads.create':     { key:'leads',      op:'insert' },
+  'leads.list':       { key:'leads',      op:'list'   },
+  'leads.update':     { key:'leads',      op:'update' },
+  'customers.create': { key:'customers',  op:'insert' },
+  'customers.list':   { key:'customers',  op:'list'   },
+  'complaints.create':{ key:'complaints', op:'insert' }
+};
+var API_LOCKED_FIELDS = ['id','is_deleted','created_at','updated_at','previous_balance','current_balance','customer_code','ticket_number'];
+function keyHash_(k) { return Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(k), Utilities.Charset.UTF_8)).replace(/=+$/, ''); }
+function jsonOut_(o) { return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
+
+function doPost(e) {
+  var body = {};
+  try { body = JSON.parse((e && e.postData && e.postData.contents) || '{}'); }
+  catch (x) { body = (e && e.parameter) || {}; if (body.data) { try { body.data = JSON.parse(body.data); } catch (y) {} } }
+  return jsonOut_(apiHandle_(body));
+}
+
+function apiHandle_(b) {
+  try {
+    var key = String((b && b.api_key) || '');
+    if (!/^amk_[a-f0-9]{48}$/.test(key)) return { ok:false, error:'Invalid API key' };
+    var props = PropertiesService.getScriptProperties(), h = keyHash_(key), raw = props.getProperty('AK:' + h);
+    if (!raw) return { ok:false, error:'Invalid API key' };
+    var meta = JSON.parse(raw), c = CacheService.getScriptCache(), rk = 'AR:' + h, n = Number(c.get(rk) || 0);
+    if (n >= 60) return { ok:false, error:'Rate limit reached (60 requests per minute)' };
+    c.put(rk, String(n + 1), 60);
+    var t = tenantByCode_(meta.t), bad = tenantBlock_(t); if (bad) return { ok:false, error:bad };
+    enterTenant_(t, meta.u);
+    if (!userRole_(meta.u)) return { ok:false, error:'The user who created this API key is no longer active' };
+    var action = String(b.action || '');
+    if (!Object.prototype.hasOwnProperty.call(API_ACTIONS, action)) return { ok:false, error:'Unknown action', actions:Object.keys(API_ACTIONS) };
+    if (Date.now() - Number(meta.last || 0) > 3600000) { meta.last = Date.now(); props.setProperty('AK:' + h, JSON.stringify(meta)); }
+    var spec = API_ACTIONS[action];
+    if (!spec) return { ok:true, company:t.company_name, key:meta.label };
+
+    var data = (b.data && typeof b.data === 'object') ? b.data : {}, clean = {};
+    TBL[spec.key].cols.forEach(function(k){
+      if (data[k] === undefined || data[k] === null || API_LOCKED_FIELDS.indexOf(k) !== -1) return;
+      clean[k] = (typeof data[k] === 'object') ? JSON.stringify(data[k]) : String(data[k]).slice(0, 2000);
+    });
+    var r;
+    if (spec.op === 'insert') {
+      if (spec.key === 'leads' || spec.key === 'customers') { if (!clean.full_name || !clean.phone) return { ok:false, error:'full_name and phone are required' }; }
+      if (spec.key === 'leads') { clean.status = clean.status || 'new'; clean.priority = clean.priority || 'medium'; clean.source = clean.source || 'website'; }
+      if (spec.key === 'customers') { clean.connection_status = clean.connection_status || 'active'; clean.opening_balance = num(clean.opening_balance); }
+      if (spec.key === 'complaints') { if (!clean.customer_id || !clean.subject) return { ok:false, error:'customer_id and subject are required' }; clean.status = 'open'; clean.priority = clean.priority || 'medium'; }
+      r = tblInsert(meta.u, spec.key, clean);
+      if (!r.success) return { ok:false, error:r.message };
+      addLog(meta.u, 'API', action + ' #' + r.id + ' via key "' + meta.label + '"');
+      return { ok:true, id:r.id };
+    }
+    if (spec.op === 'update') {
+      if (!b.id) return { ok:false, error:'id is required' };
+      r = tblUpdate(meta.u, spec.key, b.id, clean);
+      if (!r.success) return { ok:false, error:r.message };
+      addLog(meta.u, 'API', action + ' #' + b.id + ' via key "' + meta.label + '"');
+      return { ok:true };
+    }
+    r = tblRead(meta.u, spec.key); if (!r.success) return { ok:false, error:r.message };
+    var rows = r.data, f = (b.filter && typeof b.filter === 'object') ? b.filter : {};
+    Object.keys(f).forEach(function(k){ rows = rows.filter(function(x){ return String(x[k]) === String(f[k]); }); });
+    if (b.since) rows = rows.filter(function(x){ return String(x.updated_at || x.created_at || '') >= String(b.since); });
+    var lim = Math.min(500, Math.max(1, Number(b.limit) || 100));
+    return { ok:true, count:rows.length, data:rows.slice(-lim).reverse() };
+  } catch (e) {
+    return { ok:false, error:String(e && e.message ? e.message : e) };
+  }
+}
+
+function companyKeys_() {
+  var all = PropertiesService.getScriptProperties().getProperties(), out = [];
+  Object.keys(all).forEach(function(k){
+    if (k.indexOf('AK:') !== 0) return;
+    try { var m = JSON.parse(all[k]); if (m.t === CTX.tid) out.push({ prop:k, id:k.slice(3, 15), label:m.label, user:m.u, created:m.created, last_used:m.last ? new Date(m.last).toISOString() : '', hint:m.hint }); } catch (e) {}
+  });
+  return out;
+}
+function listApiKeys(caller) {
+  if (!gate_(caller, 'settings', 'e')) return { success:false, message:'Only the owner or an admin can manage API keys' };
+  return { success:true, endpoint:ScriptApp.getService().getUrl(), actions:Object.keys(API_ACTIONS),
+           data:companyKeys_().map(function(k){ delete k.prop; return k; }) };
+}
+function createApiKey(caller, label) {
+  if (!gate_(caller, 'settings', 'e')) return { success:false, message:'Only the owner or an admin can manage API keys' };
+  if (companyKeys_().length >= 10) return { success:false, message:'Maximum 10 API keys. Revoke an old one first.' };
+  var key = 'amk_' + (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, '').slice(0, 48);
+  label = String(label || 'API key').replace(/[<>]/g, '').slice(0, 40);
+  PropertiesService.getScriptProperties().setProperty('AK:' + keyHash_(key),
+    JSON.stringify({ t:CTX.tid, u:caller, label:label, created:nowIso(), hint:key.slice(-4) }));
+  addLog(caller, 'API Key Created', label);
+  return { success:true, key:key, endpoint:ScriptApp.getService().getUrl(), message:'API key created' };
+}
+function revokeApiKey(caller, id) {
+  if (!gate_(caller, 'settings', 'e')) return { success:false, message:'Only the owner or an admin can manage API keys' };
+  var k = companyKeys_().filter(function(x){ return x.id === String(id); })[0];
+  if (!k) return { success:false, message:'Key not found' };
+  PropertiesService.getScriptProperties().deleteProperty(k.prop);
+  addLog(caller, 'API Key Revoked', k.label);
+  return { success:true, message:'API key revoked — it stops working immediately' };
 }
 
 // ============== New company database builder ==============

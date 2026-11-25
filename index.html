@@ -1738,6 +1738,7 @@
       users:        { label:'Staff / Users',       icon:'fa-users',              group:'System' },
       logs:         { label:'Activity Logs',       icon:'fa-clock-rotate-left',  group:'System' },
       permissions:  { label:'Roles & Permissions', icon:'fa-user-shield',        group:'System' },
+      integrations: { label:'API & Integrations',  icon:'fa-plug',               group:'System' },
       settings:     { label:'Settings',            icon:'fa-cog',                group:'System' },
       about:        { label:'About App',           icon:'fa-circle-info',        group:'System' },
       account:      { label:'My Account',          icon:'fa-user-circle',        group:'System' }
@@ -1937,6 +1938,7 @@
       const menuVisible = (k) => {
         if (ALWAYS_PAGES.indexOf(k) !== -1) return true;
         if (k === 'permissions') return !!canEditRbac;
+        if (k === 'integrations') return can(perms, 'settings', 'e');
         if (HIDDEN.has(k)) return false;
         return can(perms, k, 'v');
       };
@@ -4341,6 +4343,84 @@
       );
     }
 
+    // ============== API & Integrations ==============
+    const copyTxt = (t) => {
+      const ok = () => Swal.fire({ icon:'success', title:'Copied', timer:900, showConfirmButton:false });
+      const fb = () => { const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); ok(); } catch (e) {} ta.remove(); };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(ok, fb); else fb();
+    };
+    function IntegrationsView({ currentUser }) {
+      const { data, mutate } = useSWR('apikeys', () => gsRun('listApiKeys', currentUser), { revalidateOnFocus:false });
+      const d = (data && data.success) ? data : null;
+      const create = () => Swal.fire({ title:'New API key', input:'text', inputLabel:'Name it after where you will use it', inputPlaceholder:'e.g. Website form, Zapier, Facebook Leads', showCancelButton:true, confirmButtonText:'Create key',
+          inputValidator:(v) => !String(v || '').trim() && 'Please enter a name' })
+        .then(res => { if (!res.isConfirmed) return;
+          gsRun('createApiKey', currentUser, res.value).then(r => {
+            if (!r || !r.success) return Swal.fire({ icon:'error', title:'Error', text:(r && r.message) || 'Failed' });
+            mutate();
+            Swal.fire({ icon:'success', title:'Copy your API key now', confirmButtonText:'Copy & close',
+              html:'<p style="font-size:13px;color:#b06000;margin-bottom:8px">For security it is shown only once. Treat it like a password.</p><code style="display:block;word-break:break-all;background:#f3f4f6;padding:10px;border-radius:8px;font-size:13px">' + esc(r.key) + '</code>' })
+              .then(() => copyTxt(r.key));
+          }); });
+      const revoke = (k) => Swal.fire({ icon:'warning', title:'Revoke "' + k.label + '"?', text:'Any integration using this key stops working immediately.', showCancelButton:true, confirmButtonColor:'#ea4335', confirmButtonText:'Revoke' })
+        .then(res => { if (res.isConfirmed) gsRun('revokeApiKey', currentUser, k.id).then(r => { Swal.fire({ icon:(r && r.success) ? 'success' : 'error', text:(r && r.message) || 'Failed', timer:1600, showConfirmButton:false }); mutate(); }); });
+      if (!data) return <div className="data-section"><TableSkeleton rows={4} columns={4} /></div>;
+      if (!d) return <NoAccessView />;
+      const ep = d.endpoint;
+      const ex1 = `{\n  "api_key": "amk_YOUR_KEY",\n  "action": "leads.create",\n  "data": {\n    "full_name": "Ali Khan",\n    "phone": "0300-1234567",\n    "email": "ali@example.com",\n    "source": "website",\n    "notes": "Interested in the premium plan"\n  }\n}`;
+      const curl = `curl -L "${ep}" \\\n  -H "Content-Type: text/plain" \\\n  -d '${ex1.replace(/\n\s*/g, ' ')}'`;
+      const pre = (t) => <pre style={{ background:'#0f172a', color:'#e2e8f0', padding:12, borderRadius:8, fontSize:12.5, overflowX:'auto', whiteSpace:'pre' }}>{t}</pre>;
+      const acts = [
+        ['leads.create','Add a lead (website form, Facebook/Google lead ads, WhatsApp bot)','data: full_name*, phone*, email, address, source, status, priority, quote_amount, next_followup_date, notes'],
+        ['leads.list','Get leads (newest first)','filter: {"status":"new"} · since: "2025-01-01" · limit: 100'],
+        ['leads.update','Update a lead','id* + data: status, priority, notes, next_followup_date, …'],
+        ['customers.create','Add a ' + P.customer.toLowerCase(),'data: full_name*, phone*, email, address, cnic, notes'],
+        ['customers.list',' Get ' + P.customers.toLowerCase(),'filter / since / limit (same as above)'],
+        ['complaints.create','Open a support ticket','data: customer_id*, subject*, description, priority'],
+        ['ping','Test that your key works','—']
+      ];
+      return (
+        <div className="data-section">
+          <div className="lte-card">
+            <div className="lte-card-head"><i className="fas fa-key"></i> API keys <span style={{ marginLeft:'auto' }}><button className="btn btn-success btn-sm" onClick={create}><i className="fas fa-plus"></i> New API key</button></span></div>
+            <div className="lte-card-body" style={{ padding:0, overflowX:'auto' }}>
+              <table className="mini-table">
+                <thead><tr><th>Name</th><th>Key</th><th>Created by</th><th>Created</th><th>Last used</th><th></th></tr></thead>
+                <tbody>{d.data.length ? d.data.map(k => (
+                  <tr key={k.id}><td><b>{k.label}</b></td><td><code>amk_…{k.hint}</code></td><td>{k.user}</td>
+                    <td dangerouslySetInnerHTML={{ __html: fmtDate(k.created) }} /><td>{k.last_used ? <span dangerouslySetInnerHTML={{ __html: fmtDate(k.last_used) }} /> : <span style={{ color:'#999' }}>Never</span>}</td>
+                    <td><button className="action-icon delete-icon" title="Revoke" onClick={() => revoke(k)}><i className="fas fa-ban"></i></button></td></tr>
+                )) : <tr><td colSpan={6} className="ac-empty">No API keys yet. Create one to connect your website, Zapier, Make, n8n or any app.</td></tr>}</tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="lte-card">
+            <div className="lte-card-head"><i className="fas fa-book"></i> How to connect</div>
+            <div className="lte-card-body" style={{ fontSize:14, lineHeight:1.6 }}>
+              <p><b>1. Endpoint</b> — send a <b>POST</b> request to:</p>
+              <div style={{ display:'flex', gap:8, alignItems:'center', margin:'6px 0 14px' }}>
+                <code style={{ background:'#f3f4f6', padding:'8px 10px', borderRadius:8, wordBreak:'break-all', flex:1 }}>{ep}</code>
+                <button className="btn btn-secondary btn-sm" onClick={() => copyTxt(ep)}><i className="fas fa-copy"></i></button>
+              </div>
+              <p><b>2. Body</b> (JSON) — your key, the action and the data:</p>
+              {pre(ex1)}
+              <p style={{ marginTop:10 }}><b>3. Answer</b> — <code>{'{"ok":true,"id":12}'}</code> or <code>{'{"ok":false,"error":"…"}'}</code>. Turn on <b>"follow redirects"</b> in your tool (Google answers through one redirect).</p>
+              <p style={{ marginTop:10 }}><b>Zapier / Make / n8n:</b> use the <i>Webhooks / HTTP request</i> step → method POST → URL above → body type <i>Raw / JSON</i> → paste the body and map your fields.</p>
+              <p style={{ marginTop:10 }}><b>Command line test:</b></p>
+              {pre(curl)}
+              <h4 style={{ margin:'16px 0 8px', color:'var(--navy-primary)' }}>Actions</h4>
+              <div style={{ overflowX:'auto' }}><table className="mini-table">
+                <thead><tr><th>action</th><th>What it does</th><th>Fields (* required)</th></tr></thead>
+                <tbody>{acts.map(a => <tr key={a[0]}><td><code>{a[0]}</code></td><td>{a[1]}</td><td style={{ fontSize:12.5 }}>{a[2]}</td></tr>)}</tbody>
+              </table></div>
+              <p style={{ marginTop:12, color:'#888', fontSize:13 }}><i className="fas fa-shield-halved"></i> Each key only works for your company, acts with the permissions of the person who created it, is limited to 60 requests per minute, and every call is recorded in the Activity Log. Revoke a key any time.</p>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     // ============== About App ==============
     const ABOUT_ROLES = [
       { key:'super_admin', label:'Super Admin', color:'#6a1b9a' },
@@ -4433,6 +4513,7 @@
         case 'settings':    return can(perms, 'settings', 'v') ? <SettingsView currentUser={user} role={role} onSettingsUpdate={onSettingsUpdate} /> : <NoAccessView />;
         case 'logs':        return can(perms, 'logs', 'v') ? <LogsView currentUser={user} /> : <NoAccessView />;
         case 'permissions': return canEditRbac ? <PermissionsMatrixView currentUser={user} /> : <NoAccessView />;
+        case 'integrations':return can(perms, 'settings', 'e') ? <IntegrationsView currentUser={user} /> : <NoAccessView />;
         case 'about':       return <AboutView role={role} />;
         case 'account':     return <AccountView currentUser={user} currentEmail={email} role={role} />;
         default:            return <NoAccessView />;
