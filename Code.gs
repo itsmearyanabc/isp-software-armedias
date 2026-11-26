@@ -625,7 +625,7 @@ var TBL_HOOKS = {
 
 var TBL_UNIQUE = {
   payments:   [ { n:'reference_number', l:'Payment ID / Reference', ref:'receipt_number' }, { n:'slip_code', l:'Slip Code', ref:'receipt_number' } ],
-  customers:  [ { n:'customer_code', l:'Customer Code', ref:'full_name' } ],
+  customers:  [ { n:'customer_code', l:'Customer Code', ref:'full_name' }, { n:'phone', l:'Phone number', ref:'full_name', norm:'phone' } ],
   invoices:   [ { n:'invoice_number', l:'Invoice #', ref:'invoice_number' } ],
   vendors:    [ { n:'vendor_code', l:'Vendor Code', ref:'vendor_name' } ],
   complaints: [ { n:'ticket_number', l:'Ticket #', ref:'ticket_number' } ],
@@ -661,19 +661,23 @@ function uniqueErr_(key, head, data, obj, excludeId){
   var idc = head.indexOf('id'), dc = head.indexOf('is_deleted');
   for (var f = 0; f < spec.length; f++){
     var col = head.indexOf(spec[f].n); if (col === -1) continue;
-    var val = String(obj[spec[f].n] == null ? '' : obj[spec[f].n]).trim();
+    var norm = spec[f].norm === 'phone' ? phone10_ : function(v){ return String(v == null ? '' : v).trim().toLowerCase(); };
+    var raw = String(obj[spec[f].n] == null ? '' : obj[spec[f].n]).trim(), val = norm(raw);
     if (!val) continue;
     for (var i = 1; i < data.length; i++){
       if (dc !== -1 && Number(data[i][dc]) === 1) continue;
       if (excludeId != null && String(data[i][idc]) === String(excludeId)) continue;
-      if (String(data[i][col]).trim().toLowerCase() !== val.toLowerCase()) continue;
+      if (norm(data[i][col]) !== val) continue;
       var rc = head.indexOf(spec[f].ref);
       return { success:false, duplicate:true, field:spec[f].n,
-               message:spec[f].l + ' "' + val + '" is already used on ' + ((rc !== -1 && data[i][rc]) ? data[i][rc] : ('record #' + data[i][idc])) + '. Duplicates are not allowed.' };
+               message:spec[f].l + ' "' + raw + '" is already used on ' + ((rc !== -1 && data[i][rc]) ? data[i][rc] : ('record #' + data[i][idc])) + '. Duplicates are not allowed.' };
     }
   }
   return null;
 }
+
+// phone identity: last 10 digits (so 98100 12345, 09810012345 and +91 98100 12345 are the same customer)
+function phone10_(v){ var d = String(v == null ? '' : v).replace(/\D/g, ''); return d.length >= 7 ? d.slice(-10) : ''; }
 
 function custById_(id){
   var rows = readObjs_('Customers');
@@ -729,6 +733,9 @@ function tblAfterWrite_(key, obj, op){
 function tblInsert(caller, key, obj){
   if (!gate_(caller, key, 'a')) return { success:false, message:'Access denied' };
   if (key === 'payments' && obj && obj.__bill) return createBillWithPayment_(caller, obj);
+  return tblInsertCore_(caller, key, obj);
+}
+function tblInsertCore_(caller, key, obj){
   var sh = tblSheet_(key); if (!sh) return { success:false, message:'Sheet missing' };
   obj = obj || {};
   var lock = LockService.getScriptLock();
@@ -769,7 +776,21 @@ function pctAmt_(v, base) { var t = String(v == null ? '' : v).trim(); return /%
 function createBillWithPayment_(caller, obj) {
   var bill = obj.__bill || {}; delete obj.__bill;
   if (!gate_(caller, 'invoices', 'a')) return { success:false, message:'You are not allowed to create bills' };
-  if (!obj.customer_id) return { success:false, message:'Select the customer' };
+  // walk-in customer: find by phone, or create them (name is optional — the phone is the identity)
+  var newCust = false;
+  if (!obj.customer_id && bill.new_customer) {
+    var nc = bill.new_customer, p10 = phone10_(nc.phone);
+    if (!p10 || p10.length !== 10) return { success:false, message:'Enter the customer\'s 10-digit phone number' };
+    var ex = readObjs_('Customers').filter(function(c){ return phone10_(c.phone) === p10; })[0];
+    if (ex) obj.customer_id = ex.id;
+    else {
+      var cr = tblInsertCore_(caller, 'customers', { full_name: String(nc.name || '').trim().slice(0, 80) || ('Walk-in ' + p10.slice(-4)), phone: String(nc.phone).trim(),
+        connection_status:'active', installation_date: todayStr_(), opening_balance:0, notes:'Added at billing' });
+      if (!cr.success) return cr;
+      obj.customer_id = cr.id; newCust = true;
+    }
+  }
+  if (!obj.customer_id) return { success:false, message:'Enter the customer\'s phone number or select a customer' };
   var items = (bill.items || []).map(function(it){
     return { product_id: String(it.product_id || ''), name: String(it.name || '').trim().slice(0, 120), qty: Math.max(0, num(it.qty)), price: round2(num(it.price)) };
   }).filter(function(it){ return it.name && it.qty > 0; });
@@ -795,8 +816,10 @@ function createBillWithPayment_(caller, obj) {
     if (!pr.success) return { success:false, message:'Bill ' + invNo + ' was created, but the payment was not saved: ' + pr.message };
     payId = pr.id;
   }
-  return { success:true, id: payId, invoice_id: inv.id, invoice_number: invNo, total: total,
-           message: 'Bill ' + invNo + ' created' + (payId ? ' and payment recorded' : ' (no payment received yet)') };
+  var custRow = custById_(obj.customer_id) || {};
+  return { success:true, id: payId, invoice_id: inv.id, invoice_number: invNo, total: total, customer_id: obj.customer_id, new_customer: newCust,
+           customer_phone: custRow.phone || '', customer_name: custRow.full_name || '', customer_email: custRow.email || '',
+           message: 'Bill ' + invNo + ' created' + (payId ? ' and payment recorded' : ' (no payment received yet)') + (newCust ? ' · new customer added' : '') };
 }
 
 function tblUpdate(caller, key, id, obj){
@@ -926,7 +949,7 @@ function userLookup_(){
 }
 function customerLookup_(){
   return readObjs_('Customers').map(function(c){
-    return { id:c.id, label:(c.customer_code ? c.customer_code + ' · ' : '') + (c.full_name || ''), name:c.full_name || '',
+    return { id:c.id, label:(c.customer_code ? c.customer_code + ' · ' : '') + (c.full_name || '') + (c.phone ? ' · ' + c.phone : ''), name:c.full_name || '',
              phone:c.phone || '', email:c.email || '', area_id:c.area_id || '', package_id:c.package_id || '',
              balance:round2(num(c.current_balance)), previous:round2(num(c.previous_balance)), status:c.connection_status || '' };
   });

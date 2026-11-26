@@ -2170,6 +2170,7 @@
           <div className="bulk-bar" style={{ background:'linear-gradient(135deg,#33383d,#454c53)' }}>
             <span className="bb-count"><i className="fas fa-bolt"></i> Quick:</span>
             <button className="btn btn-success" onClick={() => nav('customers')}><i className="fas fa-user-plus"></i> {P.customers}</button>
+            {canPay && can(perms, 'invoices', 'a') && P.type !== 'isp' && <button className="btn btn-success" onClick={() => setPay({ __billOn:true })}><i className="fas fa-cash-register"></i> New Sale</button>}
             {canPay && <button className="btn btn-primary" onClick={() => setPay({})}><i className="fas fa-money-bill-wave"></i> Record Payment</button>}
             {canBill && <button className="btn btn-primary" onClick={runBilling}><i className="fas fa-bolt"></i> Run Monthly Billing</button>}
             <button className="btn btn-primary" onClick={() => nav('recovery')}><i className="fas fa-hand-holding-dollar"></i> Recovery Board</button>
@@ -3312,7 +3313,7 @@
       if (!r || !r.success) return false;
       const invId = module === 'invoices' ? r.id : (module === 'payments' ? r.invoice_id : null);
       if (!invId) return false;
-      const custEmail = (((lk && lk.customers) || []).find(o => String(o.id) === String((form || {}).customer_id)) || {}).email || '';
+      const custEmail = r.customer_email || (((lk && lk.customers) || []).find(o => String(o.id) === String((form || {}).customer_id)) || {}).email || '';
       const viaEmail = () => {
         Swal.fire({ toast:true, position:'top-end', icon:'info', title:'Emailing bill…', showConfirmButton:false, timer:2500 });
         gsRun('sendInvoiceEmail', currentUser, invId).then(x => Swal.fire({ toast:true, position:'top-end', icon:(x && x.success) ? 'success' : 'warning', title:(x && x.message) || 'Email failed', showConfirmButton:!(x && x.success), timer:(x && x.success) ? 3000 : undefined }));
@@ -3322,7 +3323,7 @@
         gsRun('sendInvoiceWhatsApp', currentUser, invId).then(x => Swal.fire({ toast:true, position:'top-end', icon:(x && x.success) ? 'success' : 'warning', title:(x && x.message) || 'WhatsApp failed', showConfirmButton:!(x && x.success), timer:(x && x.success) ? 3000 : undefined }));
       };
       if (WA.enabled && WA.auto) { viaApi(); return true; }
-      const f = form || {}, phone = custPhone(lk, f.customer_id);
+      const f = form || {}, phone = r.customer_phone || custPhone(lk, f.customer_id), cname = r.customer_name || custName(lk, f.customer_id);
       const total = r.total != null ? r.total : num0(f.amount) - num0(f.discount) + num0(f.tax);
       const invNo = r.invoice_number || ('INV-' + String(invId).padStart(5, '0'));
       Swal.fire({ icon:'success', title:(module === 'payments' ? r.message : 'Invoice saved'), text:'Send bill ' + invNo + ' (' + fmtMoney(total) + ') to the customer?', showCancelButton:true,
@@ -3334,7 +3335,7 @@
           if (!res.isConfirmed) return;
           if (WA.enabled) return viaApi();
           if (!telDigits(phone)) return Swal.fire({ icon:'info', title:'No phone number', text:'This customer has no phone number on file.' });
-          pdfToWhatsApp('invoice', invId, phone, custName(lk, f.customer_id), (x) => [`Dear ${custName(lk, f.customer_id)},`, ``,
+          pdfToWhatsApp('invoice', invId, phone, cname, (x) => [`Dear ${cname},`, ``,
             `Your bill ${x.invoice_number} for ${fmtMoney(x.total)} is ready${x.due_date ? ' (due ' + x.due_date + ')' : ''}.`, `View / download your bill: ${x.link}`, ``,
             `Thank you for your business — ${P.company || ''}`].join('\n'), currentUser);
         });
@@ -3907,6 +3908,37 @@
       const discount = pctOf(b.discount, sub), net = r2(sub - discount), tax = pctOf(b.tax, net);
       return { sub, discount, net, tax, total: r2(net + tax) };
     };
+    // phone = identity: 10 digits → existing customer found, otherwise a new walk-in customer is created on save
+    const phone10 = (v) => { const d = String(v == null ? '' : v).replace(/\D/g, ''); return d.length >= 7 ? d.slice(-10) : ''; };
+    function BillCustomer({ bill, setBill, form, setForm, lookups }) {
+      const custs = (lookups && lookups.customers) || [];
+      const p = phone10(bill.phone), full = p.length === 10;
+      const match = full ? custs.find(c => phone10(c.phone) === p) : null;
+      const picked = form.customer_id ? custs.find(c => String(c.id) === String(form.customer_id)) : null;
+      const onPhone = (v) => {
+        const d = phone10(v), m = d.length === 10 ? custs.find(c => phone10(c.phone) === d) : null;
+        setBill(b => ({ ...b, phone:v }));
+        setForm(fp => ({ ...fp, customer_id: m ? m.id : '' }));
+      };
+      const box = { border:'1px solid #e3e6eb', borderRadius:10, padding:12, marginBottom:14, background:'#f8f9fb' };
+      return (
+        <div style={box}>
+          <div style={{ fontWeight:700, marginBottom:8, color:'var(--navy-primary)' }}><i className="fas fa-user"></i> Customer</div>
+          <div className="form-grid">
+            <div className="form-group" style={{ marginBottom:8 }}><label>Phone number *</label>
+              <input type="tel" inputMode="numeric" autoFocus value={bill.phone || ''} onChange={(e) => onPhone(e.target.value)} placeholder="10-digit mobile number" /></div>
+            {full && !match && !picked && <div className="form-group" style={{ marginBottom:8 }}><label>Name <span style={{ fontWeight:400, color:'#888' }}>(optional)</span></label>
+              <input value={bill.cname || ''} onChange={(e) => setBill(b => ({ ...b, cname:e.target.value }))} placeholder="Customer name" /></div>}
+          </div>
+          {picked && <div style={{ color:'#137333', fontSize:14 }}><i className="fas fa-circle-check"></i> <b>{picked.name || picked.label}</b> · {picked.phone} {Number(picked.balance) > 0.009 && <span className="eb eb-warn" style={{ marginLeft:6 }}>Due {fmtMoney(picked.balance)}</span>}
+            <button type="button" className="link-btn" style={{ marginLeft:8 }} onClick={() => { setForm(fp => ({ ...fp, customer_id:'' })); setBill(b => ({ ...b, phone:'' })); }}>change</button></div>}
+          {full && !match && !picked && <div style={{ color:'#b06000', fontSize:13 }}><i className="fas fa-user-plus"></i> New customer — they'll be added when you save this bill.</div>}
+          {!full && !picked && <div style={{ fontSize:12.5, color:'#888', marginTop:4 }}>or pick an existing customer:
+            <div style={{ marginTop:6 }}><SearchableDropdown options={custs} value={form.customer_id || ''} onChange={(v) => { const c = custs.find(x => String(x.id) === String(v)); setForm(fp => ({ ...fp, customer_id:v })); if (c) setBill(b => ({ ...b, phone:c.phone || '' })); }} placeholder="— Search name, code or phone —" /></div></div>}
+        </div>
+      );
+    }
+
     function BillBuilder({ bill, setBill, lookups }) {
       const prods = ((lookups && lookups.packages) || []).map(p => ({ id:String(p.id), label:p.name + ' · ' + fmtMoney(p.price) }));
       const upd = (i, patch) => setBill(b => ({ ...b, items: b.items.map((it, j) => j === i ? { ...it, ...patch } : it) }));
@@ -3975,7 +4007,7 @@
       const [form, setForm] = useState(blank);
       const [saving, setSaving] = useState(false);
       const canBill = cfg.key === 'payments' && isNewRec && can(CUR_PERMS, 'invoices', 'a');
-      const [bill, setBillRaw] = useState({ on:false, items:[{ product_id:'', name:'', qty:1, price:'' }], discount:'0', tax:'0', saveNew:true });
+      const [bill, setBillRaw] = useState({ on:!!(initial && initial.__billOn), phone:'', cname:'', items:[{ product_id:'', name:'', qty:1, price:'' }], discount:'0', tax:'0', saveNew:true });
       const [amtTouched, setAmtTouched] = useState(false);
       // while billing, "amount received" follows the bill total until the user types their own amount (partial payment)
       const setBill = (fn) => setBillRaw(prev => { const nb = typeof fn === 'function' ? fn(prev) : fn; if (nb.on && !amtTouched) setForm(fp => ({ ...fp, amount: billMath(nb).total })); return nb; });
@@ -3989,7 +4021,9 @@
       });
       const submit = (e) => {
         e.preventDefault();
-        const missing = cfg.fields.filter(f => f.req && (form[f.n] === '' || form[f.n] == null));
+        const billNewCust = canBill && bill.on && !form.customer_id && phone10(bill.phone).length === 10;
+        const missing = cfg.fields.filter(f => f.req && (form[f.n] === '' || form[f.n] == null) && !(billNewCust && f.n === 'customer_id'));
+        if (canBill && bill.on && !form.customer_id && !billNewCust) { Swal.fire({ icon:'warning', title:'Customer phone', text:'Enter the customer\'s 10-digit phone number, or pick an existing customer.' }); return; }
         if (missing.length) { Swal.fire({ icon:'warning', title:'Required fields', text:'Please fill: ' + missing.map(m => m.l).join(', ') }); return; }
         setSaving(true);
         let out = form;
@@ -3997,7 +4031,8 @@
         if (canBill && bill.on) {
           const items = bill.items.filter(it => String(it.name || '').trim() && num0(it.qty) > 0);
           if (!items.length) { setSaving(false); Swal.fire({ icon:'warning', title:'Add an item', text:'Add at least one item to the bill, or switch billing off.' }); return; }
-          out = { ...form, invoice_id:'', __bill:{ items, discount:bill.discount, tax:bill.tax, saveNew:!!bill.saveNew } };
+          out = { ...form, invoice_id:'', __bill:{ items, discount:bill.discount, tax:bill.tax, saveNew:!!bill.saveNew,
+                  new_customer: form.customer_id ? null : { phone:bill.phone, name:bill.cname || '' } } };
         }
         Promise.resolve(onSave(out)).finally(() => setSaving(false));
       };
@@ -4018,9 +4053,10 @@
                   onPick={(iv) => setForm(prev => ({ ...prev, invoice_id: iv.id || '', amount: iv.balance }))} />
               )}
               <form onSubmit={submit}>
+                {canBill && bill.on && <BillCustomer bill={bill} setBill={setBill} form={form} setForm={setForm} lookups={lookups} />}
                 {canBill && bill.on && <BillBuilder bill={bill} setBill={setBill} lookups={lookups} />}
                 <div className="form-grid">
-                  {cfg.fields.filter(f => !(canBill && bill.on && f.n === 'invoice_id')).map(f => <EntityField key={f.n} f={f} form={form} value={form[f.n]} onChange={(v) => { if (f.n === 'amount') setAmtTouched(true); set(f.n, v); }} lookups={lookups} />)}
+                  {cfg.fields.filter(f => !(canBill && bill.on && (f.n === 'invoice_id' || f.n === 'customer_id'))).map(f => <EntityField key={f.n} f={f} form={form} value={form[f.n]} onChange={(v) => { if (f.n === 'amount') setAmtTouched(true); set(f.n, v); }} lookups={lookups} />)}
                 </div>
                 {isInv && <InvoiceCalc form={form} />}
                 <div className="form-actions">
@@ -4132,7 +4168,7 @@
       const clearFilters = () => { setFilters({}); delete _dateFilters[tableId]; if (tRef.current) { tRef.current.search('').columns().search('').draw(); } };
       const refresh = (money) => {
         const p = mutate(); swrRefresh('dash:stats');
-        if (['customers','areas','packages','invoices','vendors','banks'].indexOf(cfg.key) !== -1) swrRefresh('lookups');
+        if (['customers','areas','packages','invoices','vendors','banks','payments'].indexOf(cfg.key) !== -1) swrRefresh('lookups');
         if (money !== false && ['payments','invoices'].indexOf(cfg.key) !== -1) mutateLedger();
         return p;
       };
