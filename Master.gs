@@ -133,10 +133,13 @@ function masterCreds_() {
 function masterLogin(user, pass) {
   try {
     var cr = masterCreds_();
+    if (rlCount_('MASTER') >= 10) return { success:false, message:'Too many wrong attempts. Please wait 15 minutes.' };
     if (String(user || '').trim() !== cr.MASTER_USER || hash_(String(pass || ''), cr.MASTER_SALT) !== cr.MASTER_HASH) {
+      rlBump_('MASTER');
       mlog_('Master Login Failed', '', 'user: ' + String(user || '').slice(0, 40));
       return { success:false, message:'Invalid username or password' };
     }
+    rlClear_('MASTER');
     tenantsSheet_(); // make sure master sheets exist
     var token = newToken_();
     CacheService.getScriptCache().put('M:' + token, '1', SESSION_TTL);

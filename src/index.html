@@ -1579,12 +1579,22 @@
     // ============== Server calls ==============
     // every app call goes through api(token, fn, args) — the server derives company + user from the session token
     const sessTok = () => { try { const t = JSON.parse(localStorage.getItem('userSession') || '{}').token; if (t) return t; } catch (e) {} return (window.__memSession && window.__memSession.token) || ''; };
+    let _lastTouch = 0;
+    const touchSession = () => {
+      if (Date.now() - _lastTouch < 60000) return; _lastTouch = Date.now();
+      try { const s = JSON.parse(localStorage.getItem('userSession') || 'null'); if (s) { s.lastActive = Date.now(); localStorage.setItem('userSession', JSON.stringify(s)); } } catch (e) {}
+      if (window.__memSession) window.__memSession.lastActive = Date.now();
+    };
     const gsPublic = (fn, ...args) => new Promise((resolve, reject) => {
       google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[fn](...args);
     });
     const gsRun = (fn, ...args) => new Promise((resolve, reject) => {
       google.script.run
-        .withSuccessHandler((r) => { if (r && r.authExpired) window.dispatchEvent(new CustomEvent('auth-expired', { detail: r.message })); resolve(r); })
+        .withSuccessHandler((r) => {
+          if (r && r.authExpired) window.dispatchEvent(new CustomEvent('auth-expired', { detail: r.message }));
+          else touchSession();
+          resolve(r);
+        })
         .withFailureHandler(reject)
         .api(sessTok(), fn, args.map(a => a === undefined ? null : a));
     });
@@ -4968,7 +4978,7 @@
 
     function App() {
       const [sess, setSess] = useState(null); // { token, companyId, companyName, daysLeft, username, email, role, profileImage, themeMode, customColors, permissions, canEditRbac, loginTime }
-      const SESSION_DURATION = 60 * 60 * 1000;
+      const SESSION_DURATION = 6 * 60 * 60 * 1000;   // signed out only after 6 hours WITHOUT activity (matches the server)
 
       useEffect(() => {
         document.body.classList.toggle('dark-mode', !!(sess && sess.themeMode === 'dark'));
@@ -4985,7 +4995,7 @@
 
       useEffect(() => {
         const s = readSession();
-        if (s && s.token && (Date.now() - s.loginTime) < SESSION_DURATION) {
+        if (s && s.token && (Date.now() - (s.lastActive || s.loginTime)) < SESSION_DURATION) {
           applyProfile(s.businessType, s.companyName, s.phoneCode);
           swrHydrate(cacheNs(s));
           swrPrefetch(s.username, s.permissions);
@@ -4999,7 +5009,7 @@
         window.addEventListener('auth-expired', onExpired);
         const iv = setInterval(() => {
           const cur = readSession();
-          if (cur && (Date.now() - cur.loginTime) >= SESSION_DURATION) clearLocal(cur, 'Your session has expired. Please login again.');
+          if (cur && (Date.now() - (cur.lastActive || cur.loginTime)) >= SESSION_DURATION) clearLocal(cur, 'You were signed out after 6 hours without activity. Please login again.');
         }, 60000);
         return () => { clearInterval(iv); window.removeEventListener('auth-expired', onExpired); };
       }, []);
@@ -5009,7 +5019,7 @@
           token: r.token, companyId: r.companyId, companyName: r.companyName, daysLeft: r.daysLeft, businessType: r.businessType || 'isp', phoneCode: r.phoneCode || '91', plan: r.plan || '',
           username: r.username, role: r.role, email: r.email,
           profileImage: r.profileImage || '', themeMode: r.themeMode || 'light', customColors: r.customColors || '',
-          permissions: r.permissions || null, canEditRbac: !!r.canEditRbac, loginTime: Date.now()
+          permissions: r.permissions || null, canEditRbac: !!r.canEditRbac, loginTime: Date.now(), lastActive: Date.now()
         };
         try { localStorage.setItem('userSession', JSON.stringify(s)); } catch (e) {}
         window.__memSession = s;

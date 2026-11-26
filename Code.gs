@@ -191,6 +191,11 @@ function hashPlainPasswords_() {
   return n;
 }
 
+// simple attempt limits (brute-force protection), kept in the script cache
+function rlCount_(k) { return Number(CacheService.getScriptCache().get('RL:' + k) || 0); }
+function rlBump_(k, ttl) { var c = CacheService.getScriptCache(); c.put('RL:' + k, String(rlCount_(k) + 1), ttl || 900); }
+function rlClear_(k) { CacheService.getScriptCache().remove('RL:' + k); }
+
 function logout(token) { sessDrop_(token); return { success:true }; }
 
 // ============== Authentication ==============
@@ -201,6 +206,8 @@ function authenticateUser(companyId, username, password) {
     var bad = tenantBlock_(t);
     if (bad) return { success:false, message:bad, expired: !!(t && t.status !== 'suspended' && t.status !== 'pending' && daysLeft_(t.expiry_date) !== null && daysLeft_(t.expiry_date) < 0) };
     if (!username || !password) return { success:false, message:'Username and password are required' };
+    var rlk = 'LG:' + t.tenant_id + ':' + username.toLowerCase();
+    if (rlCount_(rlk) >= 8) return { success:false, message:'Too many wrong attempts. Please wait 15 minutes, or use Forgot Password.' };
     enterTenant_(t, null);
     var sheet = db_().getSheetByName(USERS_SHEET);
     if (!sheet) return { success:false, message:'Company database is not set up. Please contact Armedias.' };
@@ -209,7 +216,8 @@ function authenticateUser(companyId, username, password) {
       if (String(data[i][0]) !== username) continue;
       if (Number(data[i][15]) === 1) { addLog(username, 'Login Failed', 'Account removed'); return { success:false, message:'Username not found' }; }
       if (data[i][4] !== 'Active') { addLog(username, 'Login Failed', 'Account is inactive'); return { success:false, message:'Account is inactive. Please contact administrator.' }; }
-      if (!pwCheck_(data[i][2], password)) { addLog(username, 'Login Failed', 'Invalid password'); return { success:false, message:'Invalid password' }; }
+      if (!pwCheck_(data[i][2], password)) { rlBump_(rlk); addLog(username, 'Login Failed', 'Invalid password'); return { success:false, message:'Invalid password' }; }
+      rlClear_(rlk);
       sheet.getRange(i + 1, 17).setValue(nowIso()); // LastLogin
       if (!pwIsHashed_(data[i][2])) sheet.getRange(i + 1, 3).setNumberFormat('@').setValue(pwHash_(password)); // upgrade old plain text
       addLog(username, 'Login Success', 'User logged in successfully');
@@ -224,6 +232,7 @@ function authenticateUser(companyId, username, password) {
         permissions: rbacPermsFor_(data[i][3]), canEditRbac: canEditRbac_(data[i][3])
       };
     }
+    rlBump_(rlk);
     return { success:false, message:'Username not found' };
   } catch (error) {
     return { success:false, message:'Error: ' + error.toString() };
@@ -256,6 +265,9 @@ function forgotPassword(companyId, identifier) {
     for (var i = 1; i < data.length; i++) {
       if (Number(data[i][15]) === 1) continue;
       if (String(data[i][0]).toLowerCase() === id || String(data[i][1]).toLowerCase() === id) {
+        var fk = 'FP:' + t.tenant_id + ':' + String(data[i][0]).toLowerCase();
+        if (rlCount_(fk) >= 3) return { success:false, message:'Too many reset codes requested. Please try again in an hour.' };
+        rlBump_(fk, 3600); rlClear_('OT:' + t.tenant_id + ':' + String(data[i][0]).toLowerCase());
         var code = '' + Math.floor(100000 + Math.random() * 900000);
         sheet.getRange(i + 1, otpCol + 1).setValue(code + '|' + (Date.now() + 15 * 60 * 1000));
         var email = data[i][1];
@@ -284,7 +296,13 @@ function resetPasswordWithOtp(companyId, identifier, otp, newPassword) {
         if (!stored) return { success:false, message:'No OTP requested. Use Forgot Password first.' };
         var parts = stored.split('|'), code = parts[0], exp = Number(parts[1] || 0);
         if (Date.now() > exp) return { success:false, message:'OTP expired. Request a new one.' };
-        if (String(otp).trim() !== code) return { success:false, message:'Invalid OTP' };
+        var ok = 'OT:' + t.tenant_id + ':' + String(data[i][0]).toLowerCase();
+        if (String(otp).trim() !== code) {
+          rlBump_(ok);
+          if (rlCount_(ok) >= 5) { sheet.getRange(i + 1, otpCol + 1).setValue(''); return { success:false, message:'Too many wrong codes. Please request a new OTP.' }; }
+          return { success:false, message:'Invalid OTP' };
+        }
+        rlClear_(ok);
         sheet.getRange(i + 1, 3).setNumberFormat('@').setValue(pwHash_(newPassword));
         sheet.getRange(i + 1, otpCol + 1).setValue('');
         sheet.getRange(i + 1, 11).setValue(nowIso());
@@ -636,7 +654,20 @@ function num(v){ return Number(v) || 0; }
 function round2(n){ return Math.round((Number(n)||0) * 100) / 100; }
 function nowIso(){ return new Date().toISOString(); }
 function pad_(n, w){ n = String(n); while (n.length < (w||5)) n = '0' + n; return n; }
-function isoIfDate_(v){ return (v instanceof Date) ? v.toISOString() : v; }
+// Sheets may have turned typed dates into real dates. Read them back in the company's time zone:
+// a date at local midnight → 'yyyy-MM-dd' (no one-day UTC shift); a real timestamp → ISO.
+function isoIfDate_(v){
+  if (!(v instanceof Date)) return v;
+  var tz = tz_();
+  return Utilities.formatDate(v, tz, 'HH:mm:ss') === '00:00:00' ? Utilities.formatDate(v, tz, 'yyyy-MM-dd') : v.toISOString();
+}
+// columns written as plain text so Sheets never converts them (dates, months, phones, codes)
+var TEXT_COL_RE = /(_date$|_at$|^billing_month$|phone|^mac|^ip_address$|^cnic$|^slip_code$|^reference)/;
+function putRows_(sh, startRow, head, rows){
+  if (!rows.length) return;
+  head.forEach(function(h, c){ if (TEXT_COL_RE.test(String(h))) sh.getRange(startRow, c + 1, rows.length, 1).setNumberFormat('@'); });
+  sh.getRange(startRow, 1, rows.length, head.length).setValues(rows);
+}
 function ymd_(v){ return String(isoIfDate_(v) || '').slice(0, 10); }
 
 // company timezone (from its spreadsheet) — never toISOString() a local-midnight Date
@@ -704,6 +735,7 @@ function readObjs_(sheetName){
     if (di !== -1 && Number(data[i][di]) === 1) continue;
     var o = {};
     for (var c = 0; c < head.length; c++) o[head[c]] = isoIfDate_(data[i][c]);
+    if (o.billing_month) o.billing_month = String(o.billing_month).slice(0, 7);   // always 'yyyy-MM'
     out.push(o);
   }
   return out;
@@ -759,12 +791,12 @@ function tblInsertCore_(caller, key, obj){
     if (hook.pre) hook.pre(obj);
     if (hook.compute) hook.compute(obj);
     var dup = uniqueErr_(key, head, data, obj, null); if (dup) return dup;
-    sh.appendRow(head.map(function(h){
+    putRows_(sh, sh.getLastRow() + 1, head, [head.map(function(h){
       if (h === 'id') return id;
       if (h === 'is_deleted') return 0;
       if (h === 'created_at' || h === 'updated_at') return ts;
       return (obj[h] !== undefined && obj[h] !== null) ? obj[h] : '';
-    }));
+    })]);
   } finally { lock.releaseLock(); }
   addLog(caller, key + ' Added', '#' + id);
   tblAfterWrite_(key, obj, 'insert');
@@ -834,13 +866,14 @@ function tblUpdate(caller, key, id, obj){
     for (var i = 1; i < data.length; i++){
       if (String(data[i][idc]) !== String(id)) continue;
       var row = {}; head.forEach(function(h, c){ row[h] = isoIfDate_(data[i][c]); });
+      if (row.billing_month) row.billing_month = String(row.billing_month).slice(0, 7);
       Object.keys(obj).forEach(function(k){ if (head.indexOf(k) !== -1) row[k] = obj[k]; });
       if (hook.compute) hook.compute(row);
       var dup = uniqueErr_(key, head, data, row, id); if (dup) return dup;
       row.id = data[i][idc]; row.updated_at = nowIso();
       row.created_at = isoIfDate_(data[i][head.indexOf('created_at')]);
       row.is_deleted = data[i][head.indexOf('is_deleted')];
-      sh.getRange(i + 1, 1, 1, head.length).setValues([head.map(function(h){ return (row[h] !== undefined && row[h] !== null) ? row[h] : ''; })]);
+      putRows_(sh, i + 1, head, [head.map(function(h){ return (row[h] !== undefined && row[h] !== null) ? row[h] : ''; })]);
       addLog(caller, key + ' Updated', '#' + id);
       tblAfterWrite_(key, obj, 'update');
       return { success:true, message:'Updated successfully!' };
@@ -1032,16 +1065,25 @@ function generateMonthlyInvoices(caller, month){
   month = /^\d{4}-\d{2}$/.test(String(month || '')) ? month : monthStr_();
   var lock = LockService.getScriptLock();
   try { lock.waitLock(30000); } catch (e) { return { success:false, message:'System is busy, please try again' }; }
-  var count = 0, skipped = 0, noPrice = 0;
+  var count = 0, skipped = 0, noPrice = 0, notDue = 0;
   try {
     var custs = readObjs_('Customers').filter(function(c){ return c.connection_status === 'active'; });
     var pkg = {}; readObjs_('Packages').forEach(function(p){ pkg[String(p.id)] = p; });
-    var has = {}; readObjs_('Invoices').forEach(function(i){ if (String(i.billing_month) === String(month)) has[String(i.customer_id)] = 1; });
+    var has = {}; readObjs_('Invoices').forEach(function(i){ if (String(i.billing_month).slice(0, 7) === String(month)) has[String(i.customer_id)] = 1; });
+    var mIdx = function(ym){ var p = String(ym).split('-'); return Number(p[0]) * 12 + Number(p[1]) - 1; };
     var sh = tblSheet_('invoices'), head = sheetHead_(sh, 'invoices'), id = tblNextId_(sh, head), ts = nowIso(), out = [];
     custs.forEach(function(c){
       if (has[String(c.id)]) { skipped++; return; }
       var p = pkg[String(c.package_id)], amt = p ? round2(num(p.price)) : 0;
       if (amt <= 0) { noPrice++; return; }                                  // nothing to bill
+      // billing cycle: monthly every month · quarterly every 3 · yearly every 12 (from the start month) · one-time never
+      var cyc = String(p.billing_cycle || 'monthly'), step = { monthly:1, quarterly:3, yearly:12 }[cyc] || 0;
+      if (!step) { notDue++; return; }
+      if (step > 1) {
+        var start = ymd_(c.installation_date || c.created_at).slice(0, 7);
+        var diff = /^\d{4}-\d{2}$/.test(start) ? mIdx(month) - mIdx(start) : 0;
+        if (diff < 0 || diff % step !== 0) { notDue++; return; }
+      }
       var day = Math.min(28, Math.max(1, Number(c.monthly_due_day) || 10));
       var o = { invoice_number:'INV-' + pad_(id), customer_id:c.id, package_id:c.package_id, billing_month:month,
                 amount:amt, discount:0, tax:0, total:amt, previous_balance:round2(num(c.current_balance)),
@@ -1049,11 +1091,11 @@ function generateMonthlyInvoices(caller, month){
       out.push(head.map(function(h){ if (h === 'id') return id; if (h === 'is_deleted') return 0; if (h === 'created_at' || h === 'updated_at') return ts; return o[h] !== undefined ? o[h] : ''; }));
       id++; count++;
     });
-    if (out.length) sh.getRange(sh.getLastRow() + 1, 1, out.length, head.length).setValues(out);
+    if (out.length) putRows_(sh, sh.getLastRow() + 1, head, out);
   } finally { lock.releaseLock(); }
   recalcBalances_();
   addLog(caller, 'Invoices Generated', month + ' · ' + count + ' created, ' + skipped + ' skipped');
-  return { success:true, count:count, skipped:skipped, message:'Generated ' + count + ' invoice(s) for ' + month + (skipped ? ' · ' + skipped + ' already billed' : '') + (noPrice ? ' · ' + noPrice + ' without a priced plan' : '') };
+  return { success:true, count:count, skipped:skipped, message:'Generated ' + count + ' invoice(s) for ' + month + (skipped ? ' · ' + skipped + ' already billed' : '') + (noPrice ? ' · ' + noPrice + ' without a priced plan' : '') + (notDue ? ' · ' + notDue + ' not due this month (quarterly / yearly / one-time)' : '') };
 }
 
 function getRecovery(caller){
@@ -1323,13 +1365,13 @@ function childInsert(caller, key, parentId, obj){
   obj = obj || {};
   var head = sh.getDataRange().getValues()[0], id = tblNextId_(sh, head), ts = nowIso();
   obj[c.parentCol] = parentId;
-  sh.appendRow(head.map(function(h){
+  putRows_(sh, sh.getLastRow() + 1, head, [head.map(function(h){
     if (h === 'id') return id;
     if (h === 'is_deleted') return 0;
     if (h === 'created_at' || h === 'uploaded_at') return ts;
     if (h === 'uploaded_by' || h === 'created_by_user_id') return obj[h] ? obj[h] : caller;
     return (obj[h] !== undefined && obj[h] !== null) ? obj[h] : '';
-  }));
+  })]);
   addLog(caller, key + ' Added', c.parentCol + ' #' + parentId);
   return { success:true, message:'Saved successfully!', id:id };
 }
